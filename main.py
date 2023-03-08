@@ -6,21 +6,12 @@ import socket
 import ssl
 import tempfile
 import time
+import yaml
+import pprint
 
 import paho.mqtt.client as mqtt_client
 import requests
 from PIL import Image
-
-MQTT_TOPIC = "print"
-MQTT_PORT = 8883
-MQTT_HOSTNAME = "hostname"
-MQTT_AUTH = {'username': "user", 'password': "password"}
-
-ERP_HOSTNAME = "hostname"
-ERP_AUTH = (MQTT_AUTH["username"], MQTT_AUTH["password"])
-
-PRINTER_ADDR = "192.168.5.2"
-PRINTER_PORT = 9100
 
 
 def select_print_command(data):
@@ -56,7 +47,8 @@ def message_handle(client, user_data, message):
     msg_rx = json.loads(message.payload.decode("utf-8"))
     print(msg_rx)
     # get label
-    r = requests.get(ERP_HOSTNAME + msg_rx["url"], auth=ERP_AUTH)
+    auth = (user_data['erp']['auth']["username"], user_data['erp']['auth']["password"])
+    r = requests.get(user_data['erp']['hostname'] + msg_rx["url"], auth=auth)
     # write label to temporally file
     fd, path = tempfile.mkstemp()
     os.write(fd, r.content)
@@ -76,7 +68,7 @@ def message_handle(client, user_data, message):
         # create socket and send it to the printer
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect((PRINTER_ADDR, PRINTER_PORT))
+            s.connect((user_data['printer']['address'], user_data['printer']['port']))
             s.send(cmd)
             s.close()
         except:
@@ -85,8 +77,8 @@ def message_handle(client, user_data, message):
 
 def on_connect(mqtt_client, obj, flags, rc):
     if rc == 0:
-        print("subscribe")
-        mqtt_client.subscribe(MQTT_TOPIC)
+        print("MQTT: connected")
+        mqtt_client.subscribe(obj['mqtt']['topic'])
     else:
         retry_time = 2
         while rc != 0:
@@ -98,12 +90,28 @@ def on_connect(mqtt_client, obj, flags, rc):
                 retry_time = 5
 
 
-if __name__ == "__main__":
-    mqtt = mqtt_client.Client()
-    mqtt.tls_set(None, tls_version=ssl.PROTOCOL_TLSv1_2)
-    mqtt.username_pw_set(MQTT_AUTH["username"], password=MQTT_AUTH["password"])
-    mqtt.connect(MQTT_HOSTNAME, port=MQTT_PORT)
-    mqtt.on_connect = on_connect
-    mqtt.message_callback_add(MQTT_TOPIC, message_handle)
+def get_config():
+    try:
+        f = open('config/config.yaml', 'r')
+        data = yaml.safe_load(f)
+        return data
+    except:
+        return None
 
-    mqtt.loop_forever()
+
+if __name__ == "__main__":
+    print('TSC label printer service')
+    mqtt = mqtt_client.Client()
+    config = get_config()
+
+    if config:
+        mqtt.tls_set(None, tls_version=ssl.PROTOCOL_TLSv1_2)
+        mqtt.username_pw_set(username=config['mqtt']['auth']['username'], password=config['mqtt']['auth']['password'])
+        mqtt.connect(host=config['mqtt']['hostname'], port=config['mqtt']['port'])
+        mqtt.on_connect = on_connect
+        mqtt.message_callback_add(sub=config['mqtt']['topic'], callback=message_handle)
+        mqtt.user_data_set(userdata=config)
+
+        mqtt.loop_forever()
+    else:
+        print('Configuration was not provided')
