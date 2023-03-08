@@ -1,0 +1,15 @@
+mqtt:
+  topic: print
+  port: 8883
+  hostname: erp
+  auth:
+    username: user
+    password: password
+erp:
+  hostname: https://erp.com
+  auth:
+    username: user
+    password: password
+printer:
+  address: 192.168.1.1
+  port: 9100
