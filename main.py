@@ -46,9 +46,19 @@ def select_print_command(data):
 def message_handle(client, user_data, message):
     msg_rx = json.loads(message.payload.decode("utf-8"))
     print(msg_rx)
-    # get label
+
     auth = (user_data['erp']['auth']["username"], user_data['erp']['auth']["password"])
-    r = requests.get(user_data['erp']['hostname'] + msg_rx["url"], auth=auth)
+    print_id = None
+
+    # get label
+    if msg_rx["url"].startswith("https://"):
+        auth = (user_data['mss']['auth']["username"], user_data['mss']['auth']["password"])
+        r = requests.get(msg_rx["url"], auth=auth)
+        if 'printHistoryId' in msg_rx:
+            print_id = msg_rx['printHistoryId']
+    else:
+        auth = (user_data['erp']['auth']["username"], user_data['erp']['auth']["password"])
+        r = requests.get(user_data['erp']['hostname'] + msg_rx["url"], auth=auth)
     # write label to temporally file
     fd, path = tempfile.mkstemp()
     os.write(fd, r.content)
@@ -71,8 +81,11 @@ def message_handle(client, user_data, message):
             s.connect((user_data['printer']['address'], user_data['printer']['port']))
             s.send(cmd)
             s.close()
+            if print_id:
+                requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=1', auth=auth)
         except:
-            pass
+            if print_id:
+                requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=2', auth=auth)
 
 
 def on_connect(mqtt_client, obj, flags, rc):
@@ -88,6 +101,10 @@ def on_connect(mqtt_client, obj, flags, rc):
             except Exception as e:
                 rc = 1
                 retry_time = 5
+
+
+def on_subscribe(mqtt_client, obj, flags, rc):
+    print("MQTT: subscibed")
 
 
 def get_config():
@@ -109,6 +126,7 @@ if __name__ == "__main__":
         mqtt.username_pw_set(username=config['mqtt']['auth']['username'], password=config['mqtt']['auth']['password'])
         mqtt.connect(host=config['mqtt']['hostname'], port=config['mqtt']['port'])
         mqtt.on_connect = on_connect
+        mqtt.on_subscribe = on_subscribe
         mqtt.message_callback_add(sub=config['mqtt']['topic'], callback=message_handle)
         mqtt.user_data_set(userdata=config)
 
