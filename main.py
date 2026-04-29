@@ -95,6 +95,9 @@ def message_handle(client, user_data, message):
                 requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=2', auth=auth)
     else:
         # Handle TSC printer
+        if 'address' not in user_data['printer'] or 'port' not in user_data['printer']:
+            print("TSC printer address or port not configured")
+            return
         # create command part
         cmd_first_part = select_print_command(msg_rx)
         if cmd_first_part:
@@ -108,7 +111,8 @@ def message_handle(client, user_data, message):
                 s.close()
                 if print_id:
                     requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=1', auth=auth)
-            except:
+            except Exception as e:
+                print(f"Error printing to TSC: {e}")
                 if print_id:
                     requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=2', auth=auth)
 
