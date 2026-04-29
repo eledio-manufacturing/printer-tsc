@@ -13,6 +13,10 @@ import paho.mqtt.client as mqtt_client
 import requests
 from PIL import Image
 
+from brother_ql.conversion import convert
+from brother_ql.backends.helpers import send
+from brother_ql.raster import BrotherQLRaster
+
 
 def select_print_command(data):
     """
@@ -70,22 +74,43 @@ def message_handle(client, user_data, message):
     os.remove(path)
     os.remove("{}.pcx".format(path))
 
-    # create command part
-    cmd_first_part = select_print_command(msg_rx)
-    if cmd_first_part:
-        cmd_last_part = "\r\nPRINT 1,1\r\n"
-        cmd = cmd_first_part.encode() + label.tobytes() + cmd_last_part.encode()
-        # create socket and send it to the printer
+    printer_type = user_data['printer'].get('type', 'tsc')
+    if printer_type == 'brother_ql':
+        # Handle Brother QL printer
+        model = user_data['printer'].get('model', 'QL-500')
+        identifier = user_data['printer'].get('identifier')
+        label_size = user_data['printer'].get('label_size', '62')
+        if not identifier:
+            print("Brother QL printer identifier not configured")
+            return
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect((user_data['printer']['address'], user_data['printer']['port']))
-            s.send(cmd)
-            s.close()
+            qlr = BrotherQLRaster(model)
+            instructions = convert(qlr, [label_img], label_size, cut=True)
+            send(instructions=instructions, printer_identifier=identifier, backend_identifier=None, blocking=True)
             if print_id:
                 requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=1', auth=auth)
-        except:
+        except Exception as e:
+            print(f"Error printing to Brother QL: {e}")
             if print_id:
                 requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=2', auth=auth)
+    else:
+        # Handle TSC printer
+        # create command part
+        cmd_first_part = select_print_command(msg_rx)
+        if cmd_first_part:
+            cmd_last_part = "\r\nPRINT 1,1\r\n"
+            cmd = cmd_first_part.encode() + label.tobytes() + cmd_last_part.encode()
+            # create socket and send it to the printer
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.connect((user_data['printer']['address'], user_data['printer']['port']))
+                s.send(cmd)
+                s.close()
+                if print_id:
+                    requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=1', auth=auth)
+            except:
+                if print_id:
+                    requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=2', auth=auth)
 
 
 def on_connect(mqtt_client, obj, flags, rc):
