@@ -87,7 +87,7 @@ def message_handle(client, user_data, message):
             return
         try:
             qlr = BrotherQLRaster(model)
-            instructions = convert(qlr, [label_img], label_size, cut=True)
+            instructions = convert(qlr, [label_img], label_size, cut=False)
             if identifier.startswith('usb://'):
                 dev = usb.core.find(idVendor=0x04f9)
                 if dev:
