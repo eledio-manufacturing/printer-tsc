@@ -13,8 +13,10 @@ import paho.mqtt.client as mqtt_client
 import requests
 from PIL import Image
 
+import usb.core
+
 from brother_ql.conversion import convert
-from brother_ql.backends.helpers import send
+from brother_ql.backends import backend_factory, guess_backend
 from brother_ql.raster import BrotherQLRaster
 
 
@@ -86,7 +88,17 @@ def message_handle(client, user_data, message):
         try:
             qlr = BrotherQLRaster(model)
             instructions = convert(qlr, [label_img], label_size, cut=True)
-            send(instructions=instructions, printer_identifier=identifier, backend_identifier=None, blocking=True)
+            if identifier.startswith('usb://'):
+                dev = usb.core.find(idVendor=0x04f9)
+                if dev:
+                    dev.reset()
+            selected_backend = guess_backend(identifier)
+            be = backend_factory(selected_backend)
+            printer = be['backend_class'](identifier)
+            try:
+                printer.write(instructions)
+            finally:
+                printer._dispose()
             if print_id:
                 requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=1', auth=auth)
         except Exception as e:
