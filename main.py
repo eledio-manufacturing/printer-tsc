@@ -190,22 +190,23 @@ def message_handle(client, config: AppConfig, message):
                     requests.post(url=f'https://mss.eledio.com/api/confirmPrint?id={print_id}&status=2', auth=auth)
 
 
-def on_connect(mqtt_client, obj: AppConfig, flags, rc):
-    if rc == 0:
+def on_connect(client, obj: AppConfig, connect_flags, reason_code, properties):
+    if reason_code.value == 0:
         logger.info("MQTT: connected")
-        mqtt_client.subscribe(obj.mqtt.topic)
+        client.subscribe(obj.mqtt.topic)
     else:
         retry_time = 2
-        while rc != 0:
+        connected = False
+        while not connected:
             time.sleep(retry_time)
             try:
-                rc = mqtt_client.reconnect()
-            except Exception as e:
-                rc = 1
+                client.reconnect()
+                connected = True
+            except Exception:
                 retry_time = 5
 
 
-def on_subscribe(mqtt_client, obj, flags, rc):
+def on_subscribe(client, obj, mid, reason_codes, properties):
     logger.info("MQTT: subscribed")
 
 
@@ -220,7 +221,7 @@ def get_config() -> AppConfig | None:
 
 if __name__ == "__main__":
     logger.info("TSC label printer service starting")
-    mqtt = mqtt_client.Client()
+    mqtt = mqtt_client.Client(mqtt_client.CallbackAPIVersion.VERSION2)
     config = get_config()
 
     if config:
