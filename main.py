@@ -72,16 +72,19 @@ def message_handle(client, user_data, message):
     else:
         auth = (user_data['erp']['auth']["username"], user_data['erp']['auth']["password"])
         r = requests.get(user_data['erp']['hostname'] + msg_rx["url"], auth=auth)
-    # write label to temporally file
     fd, path = tempfile.mkstemp()
-    os.write(fd, r.content)
-    os.close(fd)
-    # convert label to pcx format, open it and remove file
-    label_img = Image.open(path).convert('1')
-    label_img.save("{}.pcx".format(path))
-    label = Image.open("{}.pcx".format(path))
-    os.remove(path)
-    os.remove("{}.pcx".format(path))
+    pcx_path = path + ".pcx"
+    try:
+        os.write(fd, r.content)
+        os.close(fd)
+        label_img = Image.open(path).convert('1')
+        label_img.save(pcx_path)
+        label = Image.open(pcx_path)
+        label.load()
+    finally:
+        for f in (path, pcx_path):
+            if os.path.exists(f):
+                os.remove(f)
 
     printer_type = user_data['printer'].get('type', 'tsc')
     if printer_type == 'brother_ql':
@@ -107,11 +110,11 @@ def message_handle(client, user_data, message):
             finally:
                 printer._dispose()
             if print_id:
-                requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=1', auth=auth)
+                requests.post(url=f'https://mss.eledio.com/api/confirmPrint?id={print_id}&status=1', auth=auth)
         except Exception as e:
             logger.error("Error printing to Brother QL: %s", e)
             if print_id:
-                requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=2', auth=auth)
+                requests.post(url=f'https://mss.eledio.com/api/confirmPrint?id={print_id}&status=2', auth=auth)
     else:
         # Handle TSC printer
         if 'address' not in user_data['printer'] or 'port' not in user_data['printer']:
@@ -129,11 +132,11 @@ def message_handle(client, user_data, message):
                 s.send(cmd)
                 s.close()
                 if print_id:
-                    requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=1', auth=auth)
+                    requests.post(url=f'https://mss.eledio.com/api/confirmPrint?id={print_id}&status=1', auth=auth)
             except Exception as e:
                 logger.error("Error printing to TSC: %s", e)
                 if print_id:
-                    requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=2', auth=auth)
+                    requests.post(url=f'https://mss.eledio.com/api/confirmPrint?id={print_id}&status=2', auth=auth)
 
 
 def on_connect(mqtt_client, obj, flags, rc):
@@ -170,7 +173,7 @@ if __name__ == "__main__":
     config = get_config()
 
     if config:
-        mqtt.tls_set(None, tls_version=ssl.PROTOCOL_TLSv1_2)
+        mqtt.tls_set(tls_version=ssl.PROTOCOL_TLS_CLIENT)
         mqtt.username_pw_set(username=config['mqtt']['auth']['username'], password=config['mqtt']['auth']['password'])
         mqtt.connect(host=config['mqtt']['hostname'], port=config['mqtt']['port'])
         mqtt.on_connect = on_connect
