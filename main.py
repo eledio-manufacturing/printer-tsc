@@ -1,16 +1,23 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 import json
+import logging
 import os
 import socket
 import ssl
 import tempfile
 import time
 import yaml
-import pprint
 
 import paho.mqtt.client as mqtt_client
 import requests
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s %(levelname)-8s %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+)
+logger = logging.getLogger(__name__)
 from PIL import Image
 
 import usb.core
@@ -51,7 +58,7 @@ def select_print_command(data):
 
 def message_handle(client, user_data, message):
     msg_rx = json.loads(message.payload.decode("utf-8"))
-    print(msg_rx)
+    logger.debug("MQTT message received: %s", msg_rx)
 
     auth = (user_data['erp']['auth']["username"], user_data['erp']['auth']["password"])
     print_id = None
@@ -83,7 +90,7 @@ def message_handle(client, user_data, message):
         identifier = user_data['printer'].get('identifier')
         label_size = user_data['printer'].get('label_size', '62')
         if not identifier:
-            print("Brother QL printer identifier not configured")
+            logger.error("Brother QL printer identifier not configured")
             return
         try:
             qlr = BrotherQLRaster(model)
@@ -102,13 +109,13 @@ def message_handle(client, user_data, message):
             if print_id:
                 requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=1', auth=auth)
         except Exception as e:
-            print(f"Error printing to Brother QL: {e}")
+            logger.error("Error printing to Brother QL: %s", e)
             if print_id:
                 requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=2', auth=auth)
     else:
         # Handle TSC printer
         if 'address' not in user_data['printer'] or 'port' not in user_data['printer']:
-            print("TSC printer address or port not configured")
+            logger.error("TSC printer address or port not configured")
             return
         # create command part
         cmd_first_part = select_print_command(msg_rx)
@@ -124,14 +131,14 @@ def message_handle(client, user_data, message):
                 if print_id:
                     requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=1', auth=auth)
             except Exception as e:
-                print(f"Error printing to TSC: {e}")
+                logger.error("Error printing to TSC: %s", e)
                 if print_id:
                     requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=2', auth=auth)
 
 
 def on_connect(mqtt_client, obj, flags, rc):
     if rc == 0:
-        print("MQTT: connected")
+        logger.info("MQTT: connected")
         mqtt_client.subscribe(obj['mqtt']['topic'])
     else:
         retry_time = 2
@@ -145,7 +152,7 @@ def on_connect(mqtt_client, obj, flags, rc):
 
 
 def on_subscribe(mqtt_client, obj, flags, rc):
-    print("MQTT: subscibed")
+    logger.info("MQTT: subscribed")
 
 
 def get_config():
@@ -158,7 +165,7 @@ def get_config():
 
 
 if __name__ == "__main__":
-    print('TSC label printer service')
+    logger.info("TSC label printer service starting")
     mqtt = mqtt_client.Client()
     config = get_config()
 
@@ -173,4 +180,4 @@ if __name__ == "__main__":
 
         mqtt.loop_forever()
     else:
-        print('Configuration was not provided')
+        logger.error("Configuration was not provided")
