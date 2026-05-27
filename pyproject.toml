@@ -1,0 +1,15 @@
+[project]
+name = "printer-tsc"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "paho-mqtt",
+    "requests",
+    "Pillow",
+    "PyYAML",
+    "brother_ql",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
