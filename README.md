@@ -2,6 +2,13 @@
 
 This service supports both TSC and Brother QL label printers.
 
+## Setup
+
+```bash
+uv sync
+uv run main.py
+```
+
 ## Configuration
 
 Edit `config/config.yaml` to set up your printer.
