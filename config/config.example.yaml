@@ -10,6 +10,17 @@ erp:
   auth:
     username: user
     password: password
+mss:
+  hostname: https://mss.eledio.com
+  auth:
+    username: user
+    password: password
 printer:
+  type: tsc  # or brother_ql
+  # For TSC printers
   address: 192.168.1.1
   port: 9100
+  # For Brother QL printers
+  # identifier: usb://0x04f9:0x2015  # or tcp://192.168.1.1:9100
+  # model: QL-500
+  # label_size: 62

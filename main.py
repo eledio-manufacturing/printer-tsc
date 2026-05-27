@@ -1,17 +1,30 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 import json
+import logging
 import os
 import socket
 import ssl
 import tempfile
 import time
 import yaml
-import pprint
 
 import paho.mqtt.client as mqtt_client
 import requests
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s %(levelname)-8s %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+)
+logger = logging.getLogger(__name__)
 from PIL import Image
+
+import usb.core
+
+from brother_ql.conversion import convert
+from brother_ql.backends import backend_factory, guess_backend
+from brother_ql.raster import BrotherQLRaster
 
 
 def select_print_command(data):
@@ -45,7 +58,7 @@ def select_print_command(data):
 
 def message_handle(client, user_data, message):
     msg_rx = json.loads(message.payload.decode("utf-8"))
-    print(msg_rx)
+    logger.debug("MQTT message received: %s", msg_rx)
 
     auth = (user_data['erp']['auth']["username"], user_data['erp']['auth']["password"])
     print_id = None
@@ -59,38 +72,76 @@ def message_handle(client, user_data, message):
     else:
         auth = (user_data['erp']['auth']["username"], user_data['erp']['auth']["password"])
         r = requests.get(user_data['erp']['hostname'] + msg_rx["url"], auth=auth)
-    # write label to temporally file
     fd, path = tempfile.mkstemp()
-    os.write(fd, r.content)
-    os.close(fd)
-    # convert label to pcx format, open it and remove file
-    label_img = Image.open(path).convert('1')
-    label_img.save("{}.pcx".format(path))
-    label = Image.open("{}.pcx".format(path))
-    os.remove(path)
-    os.remove("{}.pcx".format(path))
+    pcx_path = path + ".pcx"
+    try:
+        os.write(fd, r.content)
+        os.close(fd)
+        label_img = Image.open(path).convert('1')
+        label_img.save(pcx_path)
+        label = Image.open(pcx_path)
+        label.load()
+    finally:
+        for f in (path, pcx_path):
+            if os.path.exists(f):
+                os.remove(f)
 
-    # create command part
-    cmd_first_part = select_print_command(msg_rx)
-    if cmd_first_part:
-        cmd_last_part = "\r\nPRINT 1,1\r\n"
-        cmd = cmd_first_part.encode() + label.tobytes() + cmd_last_part.encode()
-        # create socket and send it to the printer
+    printer_type = user_data['printer'].get('type', 'tsc')
+    if printer_type == 'brother_ql':
+        # Handle Brother QL printer
+        model = user_data['printer'].get('model', 'QL-500')
+        identifier = user_data['printer'].get('identifier')
+        label_size = user_data['printer'].get('label_size', '62')
+        if not identifier:
+            logger.error("Brother QL printer identifier not configured")
+            return
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect((user_data['printer']['address'], user_data['printer']['port']))
-            s.send(cmd)
-            s.close()
+            qlr = BrotherQLRaster(model)
+            instructions = convert(qlr, [label_img], label_size, cut=False)
+            if identifier.startswith('usb://'):
+                dev = usb.core.find(idVendor=0x04f9)
+                if dev:
+                    dev.reset()
+            selected_backend = guess_backend(identifier)
+            be = backend_factory(selected_backend)
+            printer = be['backend_class'](identifier)
+            try:
+                printer.write(instructions)
+            finally:
+                printer._dispose()
             if print_id:
-                requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=1', auth=auth)
-        except:
+                requests.post(url=f'https://mss.eledio.com/api/confirmPrint?id={print_id}&status=1', auth=auth)
+        except Exception as e:
+            logger.error("Error printing to Brother QL: %s", e)
             if print_id:
-                requests.post(url='https://mss.eledio.com/api/confirmPrint?id=1&status=2', auth=auth)
+                requests.post(url=f'https://mss.eledio.com/api/confirmPrint?id={print_id}&status=2', auth=auth)
+    else:
+        # Handle TSC printer
+        if 'address' not in user_data['printer'] or 'port' not in user_data['printer']:
+            logger.error("TSC printer address or port not configured")
+            return
+        # create command part
+        cmd_first_part = select_print_command(msg_rx)
+        if cmd_first_part:
+            cmd_last_part = "\r\nPRINT 1,1\r\n"
+            cmd = cmd_first_part.encode() + label.tobytes() + cmd_last_part.encode()
+            # create socket and send it to the printer
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.connect((user_data['printer']['address'], user_data['printer']['port']))
+                s.send(cmd)
+                s.close()
+                if print_id:
+                    requests.post(url=f'https://mss.eledio.com/api/confirmPrint?id={print_id}&status=1', auth=auth)
+            except Exception as e:
+                logger.error("Error printing to TSC: %s", e)
+                if print_id:
+                    requests.post(url=f'https://mss.eledio.com/api/confirmPrint?id={print_id}&status=2', auth=auth)
 
 
 def on_connect(mqtt_client, obj, flags, rc):
     if rc == 0:
-        print("MQTT: connected")
+        logger.info("MQTT: connected")
         mqtt_client.subscribe(obj['mqtt']['topic'])
     else:
         retry_time = 2
@@ -104,7 +155,7 @@ def on_connect(mqtt_client, obj, flags, rc):
 
 
 def on_subscribe(mqtt_client, obj, flags, rc):
-    print("MQTT: subscibed")
+    logger.info("MQTT: subscribed")
 
 
 def get_config():
@@ -117,12 +168,12 @@ def get_config():
 
 
 if __name__ == "__main__":
-    print('TSC label printer service')
+    logger.info("TSC label printer service starting")
     mqtt = mqtt_client.Client()
     config = get_config()
 
     if config:
-        mqtt.tls_set(None, tls_version=ssl.PROTOCOL_TLSv1_2)
+        mqtt.tls_set(tls_version=ssl.PROTOCOL_TLS_CLIENT)
         mqtt.username_pw_set(username=config['mqtt']['auth']['username'], password=config['mqtt']['auth']['password'])
         mqtt.connect(host=config['mqtt']['hostname'], port=config['mqtt']['port'])
         mqtt.on_connect = on_connect
@@ -132,4 +183,4 @@ if __name__ == "__main__":
 
         mqtt.loop_forever()
     else:
-        print('Configuration was not provided')
+        logger.error("Configuration was not provided")
