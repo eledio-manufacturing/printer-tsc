@@ -195,15 +195,12 @@ def on_connect(client, obj: AppConfig, connect_flags, reason_code, properties):
         logger.info("MQTT: connected")
         client.subscribe(obj.mqtt.topic)
     else:
-        retry_time = 2
-        connected = False
-        while not connected:
-            time.sleep(retry_time)
-            try:
-                client.reconnect()
-                connected = True
-            except Exception:
-                retry_time = 5
+        logger.error("MQTT: connection failed (reason %s)", reason_code)
+
+
+def on_disconnect(client, obj, disconnect_flags, reason_code, properties):
+    if reason_code.value != 0:
+        logger.warning("MQTT: unexpected disconnect, will reconnect automatically")
 
 
 def on_subscribe(client, obj, mid, reason_codes, properties):
@@ -229,9 +226,11 @@ if __name__ == "__main__":
         mqtt.username_pw_set(username=config.mqtt.auth.username, password=config.mqtt.auth.password)
         mqtt.connect(host=config.mqtt.hostname, port=config.mqtt.port)
         mqtt.on_connect = on_connect
+        mqtt.on_disconnect = on_disconnect
         mqtt.on_subscribe = on_subscribe
         mqtt.message_callback_add(sub=config.mqtt.topic, callback=message_handle)
         mqtt.user_data_set(userdata=config)
+        mqtt.reconnect_delay_set(min_delay=1, max_delay=30)
 
         mqtt.loop_forever()
     else:
