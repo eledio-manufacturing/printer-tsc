@@ -27,6 +27,29 @@ from brother_ql.backends import backend_factory, guess_backend
 from brother_ql.raster import BrotherQLRaster
 
 
+BROTHER_LABEL_SIZES = {
+    (165, 566): "17x54",
+    (165, 956): "17x87",
+    (202, 202): "23x23",
+    (306, 425): "29x42",
+    (306, 991): "29x90",
+    (413, 991): "39x90",
+    (425, 495): "39x48",
+    (578, 271): "52x29",
+    (696, 271): "62x29",
+    (696, 1109): "62x100",
+    (1164, 526): "102x51",
+    (1164, 1660): "102x152",
+}
+
+
+def select_brother_label_size(width: int, height: int) -> str:
+    label = BROTHER_LABEL_SIZES.get((width, height))
+    if label is None:
+        raise ValueError(f"No Brother label matches pixel size {width}x{height}")
+    return label
+
+
 def select_print_command(data):
     """
     Create first part of command for printer
@@ -91,11 +114,11 @@ def message_handle(client, user_data, message):
         # Handle Brother QL printer
         model = user_data['printer'].get('model', 'QL-500')
         identifier = user_data['printer'].get('identifier')
-        label_size = user_data['printer'].get('label_size', '62')
         if not identifier:
             logger.error("Brother QL printer identifier not configured")
             return
         try:
+            label_size = select_brother_label_size(int(msg_rx["width"]), int(msg_rx["height"]))
             qlr = BrotherQLRaster(model)
             instructions = convert(qlr, [label_img], label_size, cut=False)
             if identifier.startswith('usb://'):
