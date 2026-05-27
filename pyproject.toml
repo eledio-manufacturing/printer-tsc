@@ -8,6 +8,7 @@ dependencies = [
     "Pillow",
     "PyYAML",
     "brother_ql",
+    "pydantic>=2",
 ]
 
 [build-system]

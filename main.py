@@ -7,10 +7,17 @@ import socket
 import ssl
 import tempfile
 import time
+from typing import Annotated, Literal, Union
 import yaml
 
 import paho.mqtt.client as mqtt_client
 import requests
+from PIL import Image
+import usb.core
+from brother_ql.conversion import convert
+from brother_ql.backends import backend_factory, guess_backend
+from brother_ql.raster import BrotherQLRaster
+from pydantic import BaseModel, Field
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -18,13 +25,48 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S',
 )
 logger = logging.getLogger(__name__)
-from PIL import Image
 
-import usb.core
 
-from brother_ql.conversion import convert
-from brother_ql.backends import backend_factory, guess_backend
-from brother_ql.raster import BrotherQLRaster
+class Auth(BaseModel):
+    username: str
+    password: str
+
+
+class MqttConfig(BaseModel):
+    hostname: str
+    port: int
+    topic: str
+    auth: Auth
+
+
+class ServiceConfig(BaseModel):
+    hostname: str
+    auth: Auth
+
+
+class TscPrinterConfig(BaseModel):
+    type: Literal['tsc']
+    address: str
+    port: int
+
+
+class BrotherQlPrinterConfig(BaseModel):
+    type: Literal['brother_ql']
+    identifier: str
+    model: str
+
+
+PrinterConfig = Annotated[
+    Union[TscPrinterConfig, BrotherQlPrinterConfig],
+    Field(discriminator='type'),
+]
+
+
+class AppConfig(BaseModel):
+    mqtt: MqttConfig
+    erp: ServiceConfig
+    mss: ServiceConfig
+    printer: PrinterConfig
 
 
 BROTHER_LABEL_SIZES = {
@@ -79,22 +121,21 @@ def select_print_command(data):
     return msg
 
 
-def message_handle(client, user_data, message):
+def message_handle(client, config: AppConfig, message):
     msg_rx = json.loads(message.payload.decode("utf-8"))
     logger.debug("MQTT message received: %s", msg_rx)
 
-    auth = (user_data['erp']['auth']["username"], user_data['erp']['auth']["password"])
     print_id = None
 
-    # get label
     if msg_rx["url"].startswith("https://"):
-        auth = (user_data['mss']['auth']["username"], user_data['mss']['auth']["password"])
+        auth = (config.mss.auth.username, config.mss.auth.password)
         r = requests.get(msg_rx["url"], auth=auth)
         if 'printHistoryId' in msg_rx:
             print_id = msg_rx['printHistoryId']
     else:
-        auth = (user_data['erp']['auth']["username"], user_data['erp']['auth']["password"])
-        r = requests.get(user_data['erp']['hostname'] + msg_rx["url"], auth=auth)
+        auth = (config.erp.auth.username, config.erp.auth.password)
+        r = requests.get(config.erp.hostname + msg_rx["url"], auth=auth)
+
     fd, path = tempfile.mkstemp()
     pcx_path = path + ".pcx"
     try:
@@ -109,25 +150,18 @@ def message_handle(client, user_data, message):
             if os.path.exists(f):
                 os.remove(f)
 
-    printer_type = user_data['printer'].get('type', 'tsc')
-    if printer_type == 'brother_ql':
-        # Handle Brother QL printer
-        model = user_data['printer'].get('model', 'QL-500')
-        identifier = user_data['printer'].get('identifier')
-        if not identifier:
-            logger.error("Brother QL printer identifier not configured")
-            return
+    if isinstance(config.printer, BrotherQlPrinterConfig):
         try:
             label_size = select_brother_label_size(int(msg_rx["width"]), int(msg_rx["height"]))
-            qlr = BrotherQLRaster(model)
+            qlr = BrotherQLRaster(config.printer.model)
             instructions = convert(qlr, [label_img], label_size, cut=False)
-            if identifier.startswith('usb://'):
+            if config.printer.identifier.startswith('usb://'):
                 dev = usb.core.find(idVendor=0x04f9)
                 if dev:
                     dev.reset()
-            selected_backend = guess_backend(identifier)
+            selected_backend = guess_backend(config.printer.identifier)
             be = backend_factory(selected_backend)
-            printer = be['backend_class'](identifier)
+            printer = be['backend_class'](config.printer.identifier)
             try:
                 printer.write(instructions)
             finally:
@@ -139,19 +173,13 @@ def message_handle(client, user_data, message):
             if print_id:
                 requests.post(url=f'https://mss.eledio.com/api/confirmPrint?id={print_id}&status=2', auth=auth)
     else:
-        # Handle TSC printer
-        if 'address' not in user_data['printer'] or 'port' not in user_data['printer']:
-            logger.error("TSC printer address or port not configured")
-            return
-        # create command part
         cmd_first_part = select_print_command(msg_rx)
         if cmd_first_part:
             cmd_last_part = "\r\nPRINT 1,1\r\n"
             cmd = cmd_first_part.encode() + label.tobytes() + cmd_last_part.encode()
-            # create socket and send it to the printer
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.connect((user_data['printer']['address'], user_data['printer']['port']))
+                s.connect((config.printer.address, config.printer.port))
                 s.send(cmd)
                 s.close()
                 if print_id:
@@ -162,10 +190,10 @@ def message_handle(client, user_data, message):
                     requests.post(url=f'https://mss.eledio.com/api/confirmPrint?id={print_id}&status=2', auth=auth)
 
 
-def on_connect(mqtt_client, obj, flags, rc):
+def on_connect(mqtt_client, obj: AppConfig, flags, rc):
     if rc == 0:
         logger.info("MQTT: connected")
-        mqtt_client.subscribe(obj['mqtt']['topic'])
+        mqtt_client.subscribe(obj.mqtt.topic)
     else:
         retry_time = 2
         while rc != 0:
@@ -181,12 +209,12 @@ def on_subscribe(mqtt_client, obj, flags, rc):
     logger.info("MQTT: subscribed")
 
 
-def get_config():
+def get_config() -> AppConfig | None:
     try:
-        f = open('config/config.yaml', 'r')
-        data = yaml.safe_load(f)
-        return data
-    except:
+        with open('config/config.yaml', 'r') as f:
+            return AppConfig.model_validate(yaml.safe_load(f))
+    except Exception as e:
+        logger.error("Failed to load config: %s", e)
         return None
 
 
@@ -197,11 +225,11 @@ if __name__ == "__main__":
 
     if config:
         mqtt.tls_set(tls_version=ssl.PROTOCOL_TLS_CLIENT)
-        mqtt.username_pw_set(username=config['mqtt']['auth']['username'], password=config['mqtt']['auth']['password'])
-        mqtt.connect(host=config['mqtt']['hostname'], port=config['mqtt']['port'])
+        mqtt.username_pw_set(username=config.mqtt.auth.username, password=config.mqtt.auth.password)
+        mqtt.connect(host=config.mqtt.hostname, port=config.mqtt.port)
         mqtt.on_connect = on_connect
         mqtt.on_subscribe = on_subscribe
-        mqtt.message_callback_add(sub=config['mqtt']['topic'], callback=message_handle)
+        mqtt.message_callback_add(sub=config.mqtt.topic, callback=message_handle)
         mqtt.user_data_set(userdata=config)
 
         mqtt.loop_forever()
