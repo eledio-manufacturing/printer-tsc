@@ -164,7 +164,7 @@ def message_handle(client, config: AppConfig, message):
                 label_img = label_img.resize(upscale_target, Image.Resampling.LANCZOS)
             label_size, dpi_600 = select_brother_label_size(*label_img.size)
             qlr = BrotherQLRaster(config.printer.model)
-            instructions = convert(qlr, [label_img], label_size, cut=False, dpi_600=dpi_600)
+            instructions = convert(qlr, [label_img], label_size, cut=False, dpi_600=dpi_600, compress=False, hq=True)
             if config.printer.identifier.startswith('usb://'):
                 dev = usb.core.find(idVendor=0x04f9)
                 if dev:
