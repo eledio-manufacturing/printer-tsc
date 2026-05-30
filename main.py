@@ -142,8 +142,8 @@ def message_handle(client, config: AppConfig, message):
     try:
         os.write(fd, r.content)
         os.close(fd)
-        label_img = Image.open(path).convert('1')
-        label_img.save(pcx_path)
+        label_img = Image.open(path).convert('L')
+        label_img.convert('1', dither=Image.Dither.NONE).save(pcx_path)
         label = Image.open(pcx_path)
         label.load()
     finally:
@@ -155,7 +155,7 @@ def message_handle(client, config: AppConfig, message):
         try:
             label_size, dpi_600 = select_brother_label_size(*label_img.size)
             qlr = BrotherQLRaster(config.printer.model)
-            instructions = convert(qlr, [label_img], label_size, cut=False, dpi_600=dpi_600)
+            instructions = convert(qlr, [label_img], label_size, cut=False, dpi_600=dpi_600, threshold=85)
             if config.printer.identifier.startswith('usb://'):
                 dev = usb.core.find(idVendor=0x04f9)
                 if dev:
