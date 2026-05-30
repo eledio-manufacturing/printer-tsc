@@ -169,7 +169,7 @@ def message_handle(client, config: AppConfig, message):
                 dev = usb.core.find(idVendor=0x04f9)
                 if dev:
                     dev.reset()
-            send(instructions, printer_identifier=config.printer.identifier)
+            send(instructions, printer_identifier=config.printer.identifier, blocking=False)
             if print_id:
                 requests.post(url=f'{config.mss.hostname}/api/confirmPrint?id={print_id}&status=1', auth=auth)
         except Exception as e:
