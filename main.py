@@ -161,11 +161,11 @@ def message_handle(client, config: AppConfig, message):
                     dev.reset()
             send(instructions, printer_identifier=config.printer.identifier)
             if print_id:
-                requests.post(url=f'https://test.mss.eledio.com/api/confirmPrint?id={print_id}&status=1', auth=auth)
+                requests.post(url=f'{config.mss.hostname}/api/confirmPrint?id={print_id}&status=1', auth=auth)
         except Exception as e:
             logger.error("Error printing to Brother QL: %s", e)
             if print_id:
-                requests.post(url=f'https://test.mss.eledio.com/api/confirmPrint?id={print_id}&status=2', auth=auth)
+                requests.post(url=f'{config.mss.hostname}/api/confirmPrint?id={print_id}&status=2', auth=auth)
     else:
         cmd_first_part = select_print_command(msg_rx)
         if cmd_first_part:
@@ -177,11 +177,11 @@ def message_handle(client, config: AppConfig, message):
                 s.send(cmd)
                 s.close()
                 if print_id:
-                    requests.post(url=f'https://mss.eledio.com/api/confirmPrint?id={print_id}&status=1', auth=auth)
+                    requests.post(url=f'{config.mss.hostname}/api/confirmPrint?id={print_id}&status=1', auth=auth)
             except Exception as e:
                 logger.error("Error printing to TSC: %s", e)
                 if print_id:
-                    requests.post(url=f'https://mss.eledio.com/api/confirmPrint?id={print_id}&status=2', auth=auth)
+                    requests.post(url=f'{config.mss.hostname}/api/confirmPrint?id={print_id}&status=2', auth=auth)
 
 
 def on_connect(client, obj: AppConfig, connect_flags, reason_code, properties):
