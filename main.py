@@ -226,7 +226,7 @@ def _print_batch(batch: list) -> None:
     else:
         cmd_prefix = select_print_command(job['msg_rx'])
         if cmd_prefix:
-            cmd = cmd_prefix.encode() + tsc_bitmap + f"\r\nPRINT {count},1\r\n".encode()
+            cmd = cmd_prefix.encode() + tsc_bitmap + f"\r\nPRINT 1,{count}\r\n".encode()
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.connect((cfg.printer.address, cfg.printer.port))
