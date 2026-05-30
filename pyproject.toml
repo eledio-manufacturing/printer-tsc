@@ -7,10 +7,6 @@ dependencies = [
     "requests",
     "Pillow",
     "PyYAML",
-    "brother_ql",
+    "brother_ql_next",
     "pydantic>=2",
 ]
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"

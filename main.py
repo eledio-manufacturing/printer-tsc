@@ -15,7 +15,7 @@ import requests
 from PIL import Image
 import usb.core
 from brother_ql.conversion import convert
-from brother_ql.backends import backend_factory, guess_backend
+from brother_ql.backends.helpers import send
 from brother_ql.raster import BrotherQLRaster
 from pydantic import BaseModel, Field
 
@@ -54,6 +54,7 @@ class BrotherQlPrinterConfig(BaseModel):
     type: Literal['brother_ql']
     identifier: str
     model: str
+    label_size: str = "62x100"
 
 
 PrinterConfig = Annotated[
@@ -68,28 +69,6 @@ class AppConfig(BaseModel):
     mss: ServiceConfig
     printer: PrinterConfig
 
-
-BROTHER_LABEL_SIZES = {
-    (165, 566): "17x54",
-    (165, 956): "17x87",
-    (202, 202): "23x23",
-    (306, 425): "29x42",
-    (306, 991): "29x90",
-    (413, 991): "39x90",
-    (425, 495): "39x48",
-    (578, 271): "52x29",
-    (696, 271): "62x29",
-    (696, 1109): "62x100",
-    (1164, 526): "102x51",
-    (1164, 1660): "102x152",
-}
-
-
-def select_brother_label_size(width: int, height: int) -> str:
-    label = BROTHER_LABEL_SIZES.get((width, height)) or BROTHER_LABEL_SIZES.get((height, width))
-    if label is None:
-        raise ValueError(f"No Brother label matches pixel size {width}x{height}")
-    return label
 
 
 def select_print_command(data):
@@ -152,26 +131,19 @@ def message_handle(client, config: AppConfig, message):
 
     if isinstance(config.printer, BrotherQlPrinterConfig):
         try:
-            label_size = select_brother_label_size(int(msg_rx["width"]), int(msg_rx["height"]))
             qlr = BrotherQLRaster(config.printer.model)
-            instructions = convert(qlr, [label_img], label_size, cut=False)
+            instructions = convert(qlr, [label_img], config.printer.label_size, cut=True)
             if config.printer.identifier.startswith('usb://'):
                 dev = usb.core.find(idVendor=0x04f9)
                 if dev:
                     dev.reset()
-            selected_backend = guess_backend(config.printer.identifier)
-            be = backend_factory(selected_backend)
-            printer = be['backend_class'](config.printer.identifier)
-            try:
-                printer.write(instructions)
-            finally:
-                printer._dispose()
+            send(instructions, printer_identifier=config.printer.identifier)
             if print_id:
-                requests.post(url=f'https://mss.eledio.com/api/confirmPrint?id={print_id}&status=1', auth=auth)
+                requests.post(url=f'https://test.mss.eledio.com/api/confirmPrint?id={print_id}&status=1', auth=auth)
         except Exception as e:
             logger.error("Error printing to Brother QL: %s", e)
             if print_id:
-                requests.post(url=f'https://mss.eledio.com/api/confirmPrint?id={print_id}&status=2', auth=auth)
+                requests.post(url=f'https://test.mss.eledio.com/api/confirmPrint?id={print_id}&status=2', auth=auth)
     else:
         cmd_first_part = select_print_command(msg_rx)
         if cmd_first_part:
