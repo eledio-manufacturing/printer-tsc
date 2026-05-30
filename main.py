@@ -54,7 +54,6 @@ class BrotherQlPrinterConfig(BaseModel):
     type: Literal['brother_ql']
     identifier: str
     model: str
-    label_size: str = "62x100"
 
 
 PrinterConfig = Annotated[
@@ -69,6 +68,28 @@ class AppConfig(BaseModel):
     mss: ServiceConfig
     printer: PrinterConfig
 
+
+BROTHER_LABEL_SIZES = {
+    (165, 566): "17x54",
+    (165, 956): "17x87",
+    (202, 202): "23x23",
+    (306, 425): "29x42",
+    (306, 991): "29x90",
+    (413, 991): "39x90",
+    (425, 495): "39x48",
+    (578, 271): "52x29",
+    (696, 271): "62x29",
+    (696, 1109): "62x100",
+    (1164, 526): "102x51",
+    (1164, 1660): "102x152",
+}
+
+
+def select_brother_label_size(width: int, height: int) -> str:
+    label = BROTHER_LABEL_SIZES.get((width, height)) or BROTHER_LABEL_SIZES.get((height, width))
+    if label is None:
+        raise ValueError(f"No Brother label matches pixel size {width}x{height}")
+    return label
 
 
 def select_print_command(data):
@@ -131,8 +152,9 @@ def message_handle(client, config: AppConfig, message):
 
     if isinstance(config.printer, BrotherQlPrinterConfig):
         try:
+            label_size = select_brother_label_size(*label_img.size)
             qlr = BrotherQLRaster(config.printer.model)
-            instructions = convert(qlr, [label_img], config.printer.label_size, cut=True)
+            instructions = convert(qlr, [label_img], label_size, cut=True)
             if config.printer.identifier.startswith('usb://'):
                 dev = usb.core.find(idVendor=0x04f9)
                 if dev:
