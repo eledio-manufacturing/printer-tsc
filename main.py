@@ -86,7 +86,7 @@ BROTHER_LABEL_SIZES = {
 
 
 def select_brother_label_size(width: int, height: int) -> str:
-    label = BROTHER_LABEL_SIZES.get((width, height))
+    label = BROTHER_LABEL_SIZES.get((width, height)) or BROTHER_LABEL_SIZES.get((height, width))
     if label is None:
         raise ValueError(f"No Brother label matches pixel size {width}x{height}")
     return label
