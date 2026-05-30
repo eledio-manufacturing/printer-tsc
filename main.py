@@ -85,6 +85,11 @@ BROTHER_LABEL_SIZES = {
     (1164, 1660): ("102x152", False),
 }
 
+DPI_600_UPSCALE = {
+    (696, 1109): (1392, 2218),
+    (1109, 696): (2218, 1392),
+}
+
 
 def select_brother_label_size(width: int, height: int) -> tuple[str, bool]:
     result = BROTHER_LABEL_SIZES.get((width, height)) or BROTHER_LABEL_SIZES.get((height, width))
@@ -153,9 +158,13 @@ def message_handle(client, config: AppConfig, message):
 
     if isinstance(config.printer, BrotherQlPrinterConfig):
         try:
+            upscale_target = DPI_600_UPSCALE.get(label_img.size)
+            if upscale_target:
+                logger.debug("Upscaling image %s -> %s for 600dpi", label_img.size, upscale_target)
+                label_img = label_img.resize(upscale_target, Image.Resampling.LANCZOS)
             label_size, dpi_600 = select_brother_label_size(*label_img.size)
             qlr = BrotherQLRaster(config.printer.model)
-            instructions = convert(qlr, [label_img], label_size, cut=False, dpi_600=dpi_600, threshold=85)
+            instructions = convert(qlr, [label_img], label_size, cut=False, dpi_600=dpi_600)
             if config.printer.identifier.startswith('usb://'):
                 dev = usb.core.find(idVendor=0x04f9)
                 if dev:
