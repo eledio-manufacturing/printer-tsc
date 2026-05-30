@@ -154,7 +154,7 @@ def message_handle(client, config: AppConfig, message):
         try:
             label_size = select_brother_label_size(*label_img.size)
             qlr = BrotherQLRaster(config.printer.model)
-            instructions = convert(qlr, [label_img], label_size, cut=True)
+            instructions = convert(qlr, [label_img], label_size, cut=False)
             if config.printer.identifier.startswith('usb://'):
                 dev = usb.core.find(idVendor=0x04f9)
                 if dev:
