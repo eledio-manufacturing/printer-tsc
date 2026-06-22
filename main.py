@@ -106,6 +106,15 @@ MULTI_COLUMN_WINDOW = 0.5
 # tspl_size / tspl_gap: physical dimensions of the full composite strip (fill in when known).
 # tspl_x / tspl_y: BITMAP dot offsets (same as single-label entry).
 MULTI_COLUMN_SIZES: dict[tuple[int, int], dict] = {
+    (280, 130): {
+        'cols': 3,
+        'gap_px': 8,
+        # Physical strip size — measure on real tape and adjust:
+        'tspl_size': '78 mm,12.7 mm',
+        'tspl_gap': '3 mm,0',
+        'tspl_x': 10,
+        'tspl_y': 10,
+    },
     # (104, 100): {
     #     'cols': 5,
     #     'gap_px': 8,
@@ -115,6 +124,8 @@ MULTI_COLUMN_SIZES: dict[tuple[int, int], dict] = {
     #     'tspl_y': 6,
     # },
 }
+
+TEST_MODE = os.environ.get('TEST_MODE', '').lower() in ('1', 'true')
 
 _config: AppConfig | None = None
 print_queue: queue.Queue = queue.Queue()
@@ -289,6 +300,15 @@ def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
 
     try:
         composite_img, composite_bitmap = _compose_columns(images, mc_cfg['gap_px'])
+        logger.debug("Multi-column composite: %d labels, %dx%d px", len(jobs), composite_img.width, composite_img.height)
+
+        if TEST_MODE:
+            out_path = f"test_multi_column_{int(time.time())}.png"
+            composite_img.save(out_path)
+            logger.info("TEST MODE: saved composite to %s", out_path)
+            _confirm_all(print_ids, status=1)
+            return
+
         composite_w_bytes = (composite_img.width + 7) // 8
         tspl_prefix = (
             f"DENSITY 13\r\nSPEED 1\r\n"
@@ -302,7 +322,7 @@ def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
         s.connect((cfg.printer.address, cfg.printer.port))
         s.send(cmd)
         s.close()
-        logger.debug("Multi-column print OK: %d labels, composite %dx%d px", len(jobs), composite_img.width, composite_img.height)
+        logger.debug("Multi-column print OK")
         _confirm_all(print_ids, status=1)
     except Exception as e:
         logger.error("Error printing multi-column to TSC: %s", e)
