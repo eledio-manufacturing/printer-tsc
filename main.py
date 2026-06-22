@@ -99,6 +99,22 @@ _cache_lock = threading.Lock()
 
 # 50ms window to accumulate identical labels into a single print command
 BATCH_WINDOW = 0.05
+# 500ms window to collect labels for multi-column compositing
+MULTI_COLUMN_WINDOW = 0.5
+
+# Single-label pixel size -> multi-column strip config.
+# tspl_size / tspl_gap: physical dimensions of the full composite strip (fill in when known).
+# tspl_x / tspl_y: BITMAP dot offsets (same as single-label entry).
+MULTI_COLUMN_SIZES: dict[tuple[int, int], dict] = {
+    # (104, 100): {
+    #     'cols': 5,
+    #     'gap_px': 8,
+    #     'tspl_size': '65 mm,9 mm',
+    #     'tspl_gap': '3 mm,0',
+    #     'tspl_x': 1,
+    #     'tspl_y': 6,
+    # },
+}
 
 _config: AppConfig | None = None
 print_queue: queue.Queue = queue.Queue()
@@ -181,6 +197,31 @@ def _fetch_image(url: str) -> tuple[Image.Image, bytes]:
     return label_img, tsc_bitmap
 
 
+def _compose_columns(images: list[Image.Image], gap_px: int) -> tuple[Image.Image, bytes]:
+    """Composite images side-by-side with gap_px white pixels between each. Returns (L-mode Image, 1-bit TSC bitmap bytes)."""
+    n = len(images)
+    h = images[0].height
+    total_w = sum(img.width for img in images) + (n - 1) * gap_px
+    canvas = Image.new('L', (total_w, h), color=255)
+    x = 0
+    for img in images:
+        canvas.paste(img, (x, 0))
+        x += img.width + gap_px
+
+    fd, pcx_path = tempfile.mkstemp(suffix='.pcx')
+    os.close(fd)
+    try:
+        canvas.convert('1', dither=Image.Dither.NONE).save(pcx_path)
+        label = Image.open(pcx_path)
+        label.load()
+        tsc_bitmap = label.tobytes()
+    finally:
+        if os.path.exists(pcx_path):
+            os.remove(pcx_path)
+
+    return canvas, tsc_bitmap
+
+
 def _confirm_all(print_ids: list, status: int) -> None:
     cfg = _config
     auth = (cfg.mss.auth.username, cfg.mss.auth.password)
@@ -241,29 +282,82 @@ def _print_batch(batch: list) -> None:
             _confirm_all(print_ids, status=2)
 
 
+def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
+    print_ids = [j['print_id'] for j in jobs]
+    images = [j['image_data'][0] for j in jobs]
+    cfg = _config
+
+    try:
+        composite_img, composite_bitmap = _compose_columns(images, mc_cfg['gap_px'])
+        composite_w_bytes = (composite_img.width + 7) // 8
+        tspl_prefix = (
+            f"DENSITY 13\r\nSPEED 1\r\n"
+            f"SIZE {mc_cfg['tspl_size']}\r\n"
+            f"GAP {mc_cfg['tspl_gap']}\r\n"
+            f"CLS\r\n"
+            f"BITMAP {mc_cfg['tspl_x']},{mc_cfg['tspl_y']},{composite_w_bytes},{composite_img.height},0,"
+        ).encode()
+        cmd = tspl_prefix + composite_bitmap + b"\r\nPRINT 1,1\r\n"
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((cfg.printer.address, cfg.printer.port))
+        s.send(cmd)
+        s.close()
+        logger.debug("Multi-column print OK: %d labels, composite %dx%d px", len(jobs), composite_img.width, composite_img.height)
+        _confirm_all(print_ids, status=1)
+    except Exception as e:
+        logger.error("Error printing multi-column to TSC: %s", e)
+        _confirm_all(print_ids, status=2)
+
+
 def print_worker() -> None:
     while True:
         try:
             job = print_queue.get()
-            batch = [job]
-            deadline = time.monotonic() + BATCH_WINDOW
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                try:
-                    next_job = print_queue.get(timeout=remaining)
-                    if (next_job['url'] == job['url']
-                            and next_job['width'] == job['width']
-                            and next_job['height'] == job['height']):
-                        batch.append(next_job)
-                    else:
-                        # Different label — re-queue and flush current batch
-                        print_queue.put(next_job)
+            w, h = job['width'], job['height']
+            mc_cfg = MULTI_COLUMN_SIZES.get((w, h))
+
+            if mc_cfg:
+                n_cols = mc_cfg['cols']
+                batch = [job]
+                deadline = time.monotonic() + MULTI_COLUMN_WINDOW
+                while len(batch) < n_cols:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
                         break
-                except queue.Empty:
-                    break
-            _print_batch(batch)
+                    try:
+                        next_job = print_queue.get(timeout=remaining)
+                        if next_job['width'] == w and next_job['height'] == h:
+                            batch.append(next_job)
+                        else:
+                            print_queue.put(next_job)
+                            break
+                    except queue.Empty:
+                        break
+                # Pad to n_cols by repeating last label
+                while len(batch) < n_cols:
+                    batch.append(batch[-1])
+                if len(batch) > len(set(j['url'] for j in batch)):
+                    logger.debug("Multi-column: padded to %d cols (%d unique labels)", n_cols, len(set(j['url'] for j in batch)))
+                _print_multi_column(batch, mc_cfg)
+            else:
+                batch = [job]
+                deadline = time.monotonic() + BATCH_WINDOW
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        next_job = print_queue.get(timeout=remaining)
+                        if (next_job['url'] == job['url']
+                                and next_job['width'] == w
+                                and next_job['height'] == h):
+                            batch.append(next_job)
+                        else:
+                            print_queue.put(next_job)
+                            break
+                    except queue.Empty:
+                        break
+                _print_batch(batch)
         except Exception as e:
             logger.error("Print worker unhandled error: %s", e)
 
