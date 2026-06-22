@@ -97,18 +97,18 @@ CACHE_TTL = 300  # seconds
 _cache: dict[tuple, tuple[float, tuple]] = {}
 _cache_lock = threading.Lock()
 
-# 50ms window to accumulate identical labels into a single print command
-BATCH_WINDOW = 0.05
-# 500ms window to collect labels for multi-column compositing
-MULTI_COLUMN_WINDOW = 0.5
+# 2000ms window to accumulate identical labels into a single print command
+BATCH_WINDOW = 2
+# 2000ms window to collect labels for multi-column compositing
+MULTI_COLUMN_WINDOW = 2
 
 # Single-label pixel size -> multi-column strip config.
 # tspl_size / tspl_gap: physical dimensions of the full composite strip (fill in when known).
 # tspl_x / tspl_y: BITMAP dot offsets (same as single-label entry).
 MULTI_COLUMN_SIZES: dict[tuple[int, int], dict] = {
     (280, 130): {
-        'cols': 3,
-        'gap_px': 8,
+        'cols': 5,
+        'gap_px': 20,
         # Physical strip size — measure on real tape and adjust:
         'tspl_size': '78 mm,12.7 mm',
         'tspl_gap': '3 mm,0',
