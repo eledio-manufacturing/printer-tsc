@@ -115,14 +115,14 @@ MULTI_COLUMN_SIZES: dict[tuple[int, int], dict] = {
         'tspl_x': 10,
         'tspl_y': 10,
     },
-    # (104, 100): {
-    #     'cols': 5,
-    #     'gap_px': 8,
-    #     'tspl_size': '65 mm,9 mm',
-    #     'tspl_gap': '3 mm,0',
-    #     'tspl_x': 1,
-    #     'tspl_y': 6,
-    # },
+    (104, 100): {
+        'cols': 6,
+        'gap_px': 32,       # tuned empirically for ERT-AM009X009Z1 tape (9mm sticker, 3mm gap)
+        'tspl_size': '72 mm,9 mm',
+        'tspl_gap': '3 mm,0',
+        'tspl_x': 20,
+        'tspl_y': 4,
+    },
 }
 
 TEST_MODE = os.environ.get('TEST_MODE', '').lower() in ('1', 'true')
@@ -174,7 +174,7 @@ def select_print_command(data):
         elif _width == 280 and _height == 130:
             msg = "DENSITY 13\r\nSPEED 1\r\nSIZE 25.4 mm,12.7 mm\r\nGAP 3 mm,0\r\nCLS\r\nBITMAP 10,10,35,130,0,"
         elif _width == 104 and _height == 100:
-            msg = "DENSITY 13\r\nSPEED 1\r\nSIZE 9 mm,9 mm\r\nGAP 3 mm,0\r\nCLS\r\nBITMAP 1,6,13,100,0,"
+            msg = "DENSITY 13\r\nSPEED 1\r\nSIZE 9 mm,9 mm\r\nGAP 2.8 mm,0\r\nCLS\r\nBITMAP 1,6,13,100,0,"
         elif _width == 528 and _height == 340:
             msg = "DENSITY 13\r\nSPEED 1\r\nSIZE 45 mm,30 mm\r\nGAP 3 mm,0\r\nCLS\r\nBITMAP 2,30,66,340,0,"
     return msg
@@ -213,7 +213,8 @@ def _compose_columns(images: list[Image.Image], gap_px: int) -> tuple[Image.Imag
     n = len(images)
     h = images[0].height
     total_w = sum(img.width for img in images) + (n - 1) * gap_px
-    canvas = Image.new('L', (total_w, h), color=255)
+    padded_w = (total_w + 7) // 8 * 8  # avoid black padding bits at row end
+    canvas = Image.new('L', (padded_w, h), color=255)
     x = 0
     for img in images:
         canvas.paste(img, (x, 0))
