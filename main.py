@@ -120,8 +120,8 @@ MULTI_COLUMN_SIZES: dict[tuple[int, int], dict] = {
         'gap_px': 32,       # tuned empirically for ERT-AM009X009Z1 tape (9mm sticker, 3mm gap)
         'tspl_size': '72 mm,9 mm',
         'tspl_gap': '3 mm,0',
-        'tspl_x': 20,
-        'tspl_y': 4,
+        'tspl_x': 14,
+        'tspl_y': 6,
     },
 }
 
