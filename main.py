@@ -117,11 +117,20 @@ MULTI_COLUMN_SIZES: dict[tuple[int, int], dict] = {
     },
     (104, 100): {
         'cols': 6,
-        'gap_px': 32,       # tuned empirically for ERT-AM009X009Z1 tape (9mm sticker, 3mm gap)
-        'tspl_size': '72 mm,9 mm',
-        'tspl_gap': '3 mm,0',
+        'gap_px': 35,       # ERT-AM009X009Z1 tape: 9mm sticker + 2.57mm gap = 11.57mm pitch.
+                            # At 300dpi (12 dots/mm per TSPL doc), pitch = 139 dots.
+                            # gap_px = pitch - label_w(104) = 35. (30 was too small -> pitch
+                            # short by ~5 dots/col, drifting labels left of their die-cut cell,
+                            # worse each column -> QR/text past cell edge on later labels.)
+        'tspl_size': '71.95 mm,9.5 mm', # width: measured total (SIZE clips print buffer if too small —
+                                        # 66.85mm content-only broke printing, so declare full length).
+        'tspl_gap': '2.57 mm,0',
         'tspl_x': 14,
-        'tspl_y': 6,
+        'tspl_y': 16,       # real cause of earlier bottom-clip was a stale gap-sensor calibration
+                            # (see calibrate.py), not this offset. Post-calibration, plenty of
+                            # spare blank space below the text (real usable height > assumed), but
+                            # tspl_y=6 left ~no top margin -> QR top edge clipped. Pushed down;
+                            # re-check photo, tune further if top/bottom margin still uneven.
     },
 }
 
@@ -296,29 +305,38 @@ def _print_batch(batch: list) -> None:
 
 def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
     print_ids = [j['print_id'] for j in jobs]
-    images = [j['image_data'][0] for j in jobs]
     cfg = _config
 
     try:
-        composite_img, composite_bitmap = _compose_columns(images, mc_cfg['gap_px'])
-        logger.debug("Multi-column composite: %d labels, %dx%d px", len(jobs), composite_img.width, composite_img.height)
+        label_w, label_h = jobs[0]['image_data'][0].size
+        w_bytes = (label_w + 7) // 8
+        pitch = label_w + mc_cfg['gap_px']
 
         if TEST_MODE:
+            images = [j['image_data'][0] for j in jobs]
+            composite_img, _ = _compose_columns(images, mc_cfg['gap_px'])
             out_path = f"test_multi_column_{int(time.time())}.png"
             composite_img.save(out_path)
             logger.info("TEST MODE: saved composite to %s", out_path)
             _confirm_all(print_ids, status=1)
             return
 
-        composite_w_bytes = (composite_img.width + 7) // 8
+        # One BITMAP command per label, each at its own physical x offset — no
+        # Python-side canvas compositing, so no dependency on gap_px matching
+        # the real print pitch (only tspl_x/pitch need to match the tape).
+        bitmap_cmds = [
+            f"BITMAP {mc_cfg['tspl_x'] + i * pitch},{mc_cfg['tspl_y']},{w_bytes},{label_h},0,".encode()
+            + j['image_data'][1]
+            for i, j in enumerate(jobs)
+        ]
         tspl_prefix = (
             f"DENSITY 13\r\nSPEED 1\r\n"
             f"SIZE {mc_cfg['tspl_size']}\r\n"
             f"GAP {mc_cfg['tspl_gap']}\r\n"
             f"CLS\r\n"
-            f"BITMAP {mc_cfg['tspl_x']},{mc_cfg['tspl_y']},{composite_w_bytes},{composite_img.height},0,"
         ).encode()
-        cmd = tspl_prefix + composite_bitmap + b"\r\nPRINT 1,1\r\n"
+        cmd = tspl_prefix + b"\r\n".join(bitmap_cmds) + b"\r\nPRINT 1,1\r\n"
+
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect((cfg.printer.address, cfg.printer.port))
         s.send(cmd)
