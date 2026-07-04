@@ -304,7 +304,9 @@ def _print_batch(batch: list) -> None:
 
 
 def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
-    print_ids = [j['print_id'] for j in jobs]
+    # jobs may contain the same job repeated (batch padded to n_cols) -> dedupe
+    # so _confirm_all doesn't POST /api/confirmPrint more than once per id.
+    print_ids = list(dict.fromkeys(j['print_id'] for j in jobs if j['print_id']))
     cfg = _config
 
     try:
