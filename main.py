@@ -9,13 +9,12 @@ import ssl
 import tempfile
 import threading
 import time
-import tkinter as tk
 from typing import Annotated, Literal, Union
 import yaml
 
 import paho.mqtt.client as mqtt_client
 import requests
-from PIL import Image, ImageTk
+from PIL import Image
 import usb.core
 from brother_ql.conversion import convert
 from brother_ql.backends.helpers import send
@@ -116,7 +115,10 @@ def _show_test_window(img: Image.Image, title: str) -> None:
     _test_ui_queue.put((img, title))
 
 
-def _test_ui_poll(root: tk.Tk) -> None:
+def _test_ui_poll(root) -> None:
+    import tkinter as tk
+    from PIL import ImageTk
+
     while True:
         try:
             img, title = _test_ui_queue.get_nowait()
@@ -392,6 +394,8 @@ if __name__ == "__main__":
         mqtt.reconnect_delay_set(min_delay=1, max_delay=30)
 
         if TEST_MODE:
+            import tkinter as tk
+
             logger.info("TEST MODE: printed labels will be shown in a preview window instead")
             root = tk.Tk()
             root.withdraw()  # only Toplevel previews are shown, no root window
