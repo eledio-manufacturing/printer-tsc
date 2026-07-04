@@ -32,7 +32,7 @@ def main() -> None:
 
     address, port = args.address, args.port
     if address is None or port is None:
-        with open('../config/config.yaml', 'r') as f:
+        with open(CONFIG_PATH, 'r') as f:
             printer_cfg = yaml.safe_load(f)['printer']
         address = address or printer_cfg['address']
         port = port or printer_cfg['port']
@@ -46,7 +46,7 @@ def main() -> None:
     print(f"Sending calibration to {address}:{port}: {cmd!r}")
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.connect((address, port))
-    s.send(cmd)
+    s.sendall(cmd)
     s.close()
     print("Sent. Printer will feed a few labels through the gap sensor to relearn paper/gap length.")
 

@@ -292,7 +292,7 @@ def _print_batch(batch: list) -> None:
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.connect((cfg.printer.address, cfg.printer.port))
-                s.send(cmd)
+                s.sendall(cmd)
                 s.close()
                 _confirm_all(print_ids, status=1)
             except Exception as e:
@@ -339,7 +339,7 @@ def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
 
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect((cfg.printer.address, cfg.printer.port))
-        s.send(cmd)
+        s.sendall(cmd)
         s.close()
         logger.debug("Multi-column print OK")
         _confirm_all(print_ids, status=1)
