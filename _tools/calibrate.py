@@ -13,9 +13,12 @@ dimensions for that tape, to make the printer re-feed through the gap
 sensor and relearn the real physical length.
 """
 import argparse
+import os
 import socket
 
 import yaml
+
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config', 'config.yaml')
 
 
 def main() -> None:
