@@ -97,8 +97,44 @@ CACHE_TTL = 300  # seconds
 _cache: dict[tuple, tuple[float, tuple]] = {}
 _cache_lock = threading.Lock()
 
-# 50ms window to accumulate identical labels into a single print command
-BATCH_WINDOW = 0.05
+# 2000ms window to accumulate identical labels into a single print command
+BATCH_WINDOW = 2
+# 2000ms window to collect labels for multi-column compositing
+MULTI_COLUMN_WINDOW = 2
+
+# Single-label pixel size -> multi-column strip config.
+# tspl_size / tspl_gap: physical dimensions of the full composite strip (fill in when known).
+# tspl_x / tspl_y: BITMAP dot offsets (same as single-label entry).
+MULTI_COLUMN_SIZES: dict[tuple[int, int], dict] = {
+    (280, 130): {
+        'cols': 5,
+        'gap_px': 20,
+        # Physical strip size — measure on real tape and adjust:
+        'tspl_size': '78 mm,12.7 mm',
+        'tspl_gap': '3 mm,0',
+        'tspl_x': 10,
+        'tspl_y': 10,
+    },
+    (104, 100): {
+        'cols': 6,
+        'gap_px': 35,       # ERT-AM009X009Z1 tape: 9mm sticker + 2.57mm gap = 11.57mm pitch.
+                            # At 300dpi (12 dots/mm per TSPL doc), pitch = 139 dots.
+                            # gap_px = pitch - label_w(104) = 35. (30 was too small -> pitch
+                            # short by ~5 dots/col, drifting labels left of their die-cut cell,
+                            # worse each column -> QR/text past cell edge on later labels.)
+        'tspl_size': '71.95 mm,9.5 mm', # width: measured total (SIZE clips print buffer if too small —
+                                        # 66.85mm content-only broke printing, so declare full length).
+        'tspl_gap': '2.57 mm,0',
+        'tspl_x': 14,
+        'tspl_y': 16,       # real cause of earlier bottom-clip was a stale gap-sensor calibration
+                            # (see calibrate.py), not this offset. Post-calibration, plenty of
+                            # spare blank space below the text (real usable height > assumed), but
+                            # tspl_y=6 left ~no top margin -> QR top edge clipped. Pushed down;
+                            # re-check photo, tune further if top/bottom margin still uneven.
+    },
+}
+
+TEST_MODE = os.environ.get('TEST_MODE', '').lower() in ('1', 'true')
 
 _config: AppConfig | None = None
 print_queue: queue.Queue = queue.Queue()
@@ -147,7 +183,7 @@ def select_print_command(data):
         elif _width == 280 and _height == 130:
             msg = "DENSITY 13\r\nSPEED 1\r\nSIZE 25.4 mm,12.7 mm\r\nGAP 3 mm,0\r\nCLS\r\nBITMAP 10,10,35,130,0,"
         elif _width == 104 and _height == 100:
-            msg = "DENSITY 13\r\nSPEED 1\r\nSIZE 9 mm,9 mm\r\nGAP 3 mm,0\r\nCLS\r\nBITMAP 1,6,13,100,0,"
+            msg = "DENSITY 13\r\nSPEED 1\r\nSIZE 9 mm,9 mm\r\nGAP 2.8 mm,0\r\nCLS\r\nBITMAP 1,6,13,100,0,"
         elif _width == 528 and _height == 340:
             msg = "DENSITY 13\r\nSPEED 1\r\nSIZE 45 mm,30 mm\r\nGAP 3 mm,0\r\nCLS\r\nBITMAP 2,30,66,340,0,"
     return msg
@@ -179,6 +215,32 @@ def _fetch_image(url: str) -> tuple[Image.Image, bytes]:
                 os.remove(f)
 
     return label_img, tsc_bitmap
+
+
+def _compose_columns(images: list[Image.Image], gap_px: int) -> tuple[Image.Image, bytes]:
+    """Composite images side-by-side with gap_px white pixels between each. Returns (L-mode Image, 1-bit TSC bitmap bytes)."""
+    n = len(images)
+    h = images[0].height
+    total_w = sum(img.width for img in images) + (n - 1) * gap_px
+    padded_w = (total_w + 7) // 8 * 8  # avoid black padding bits at row end
+    canvas = Image.new('L', (padded_w, h), color=255)
+    x = 0
+    for img in images:
+        canvas.paste(img, (x, 0))
+        x += img.width + gap_px
+
+    fd, pcx_path = tempfile.mkstemp(suffix='.pcx')
+    os.close(fd)
+    try:
+        canvas.convert('1', dither=Image.Dither.NONE).save(pcx_path)
+        label = Image.open(pcx_path)
+        label.load()
+        tsc_bitmap = label.tobytes()
+    finally:
+        if os.path.exists(pcx_path):
+            os.remove(pcx_path)
+
+    return canvas, tsc_bitmap
 
 
 def _confirm_all(print_ids: list, status: int) -> None:
@@ -230,7 +292,7 @@ def _print_batch(batch: list) -> None:
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.connect((cfg.printer.address, cfg.printer.port))
-                s.send(cmd)
+                s.sendall(cmd)
                 s.close()
                 _confirm_all(print_ids, status=1)
             except Exception as e:
@@ -241,29 +303,102 @@ def _print_batch(batch: list) -> None:
             _confirm_all(print_ids, status=2)
 
 
+def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
+    # jobs may contain the same job repeated (batch padded to n_cols) -> dedupe
+    # so _confirm_all doesn't POST /api/confirmPrint more than once per id.
+    print_ids = list(dict.fromkeys(j['print_id'] for j in jobs if j['print_id']))
+    cfg = _config
+
+    try:
+        label_w, label_h = jobs[0]['image_data'][0].size
+        w_bytes = (label_w + 7) // 8
+        pitch = label_w + mc_cfg['gap_px']
+
+        if TEST_MODE:
+            images = [j['image_data'][0] for j in jobs]
+            composite_img, _ = _compose_columns(images, mc_cfg['gap_px'])
+            out_path = f"test_multi_column_{int(time.time())}.png"
+            composite_img.save(out_path)
+            logger.info("TEST MODE: saved composite to %s", out_path)
+            _confirm_all(print_ids, status=1)
+            return
+
+        # One BITMAP command per label, each at its own physical x offset — no
+        # Python-side canvas compositing, so no dependency on gap_px matching
+        # the real print pitch (only tspl_x/pitch need to match the tape).
+        bitmap_cmds = [
+            f"BITMAP {mc_cfg['tspl_x'] + i * pitch},{mc_cfg['tspl_y']},{w_bytes},{label_h},0,".encode()
+            + j['image_data'][1]
+            for i, j in enumerate(jobs)
+        ]
+        tspl_prefix = (
+            f"DENSITY 13\r\nSPEED 1\r\n"
+            f"SIZE {mc_cfg['tspl_size']}\r\n"
+            f"GAP {mc_cfg['tspl_gap']}\r\n"
+            f"CLS\r\n"
+        ).encode()
+        cmd = tspl_prefix + b"\r\n".join(bitmap_cmds) + b"\r\nPRINT 1,1\r\n"
+
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((cfg.printer.address, cfg.printer.port))
+        s.sendall(cmd)
+        s.close()
+        logger.debug("Multi-column print OK")
+        _confirm_all(print_ids, status=1)
+    except Exception as e:
+        logger.error("Error printing multi-column to TSC: %s", e)
+        _confirm_all(print_ids, status=2)
+
+
 def print_worker() -> None:
     while True:
         try:
             job = print_queue.get()
-            batch = [job]
-            deadline = time.monotonic() + BATCH_WINDOW
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                try:
-                    next_job = print_queue.get(timeout=remaining)
-                    if (next_job['url'] == job['url']
-                            and next_job['width'] == job['width']
-                            and next_job['height'] == job['height']):
-                        batch.append(next_job)
-                    else:
-                        # Different label — re-queue and flush current batch
-                        print_queue.put(next_job)
+            w, h = job['width'], job['height']
+            mc_cfg = MULTI_COLUMN_SIZES.get((w, h))
+
+            if mc_cfg:
+                n_cols = mc_cfg['cols']
+                batch = [job]
+                deadline = time.monotonic() + MULTI_COLUMN_WINDOW
+                while len(batch) < n_cols:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
                         break
-                except queue.Empty:
-                    break
-            _print_batch(batch)
+                    try:
+                        next_job = print_queue.get(timeout=remaining)
+                        if next_job['width'] == w and next_job['height'] == h:
+                            batch.append(next_job)
+                        else:
+                            print_queue.put(next_job)
+                            break
+                    except queue.Empty:
+                        break
+                # Pad to n_cols by repeating last label
+                while len(batch) < n_cols:
+                    batch.append(batch[-1])
+                if len(batch) > len(set(j['url'] for j in batch)):
+                    logger.debug("Multi-column: padded to %d cols (%d unique labels)", n_cols, len(set(j['url'] for j in batch)))
+                _print_multi_column(batch, mc_cfg)
+            else:
+                batch = [job]
+                deadline = time.monotonic() + BATCH_WINDOW
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        next_job = print_queue.get(timeout=remaining)
+                        if (next_job['url'] == job['url']
+                                and next_job['width'] == w
+                                and next_job['height'] == h):
+                            batch.append(next_job)
+                        else:
+                            print_queue.put(next_job)
+                            break
+                    except queue.Empty:
+                        break
+                _print_batch(batch)
         except Exception as e:
             logger.error("Print worker unhandled error: %s", e)
 
