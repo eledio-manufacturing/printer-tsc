@@ -124,14 +124,17 @@ def _test_ui_poll(root) -> None:
             img, title = _test_ui_queue.get_nowait()
         except queue.Empty:
             break
-        win = tk.Toplevel(root)
-        win.title(title)
-        n_open = len(win.master.children) - 1
-        win.geometry(f"+{100 + n_open * 30}+{100 + n_open * 30}")
-        photo = ImageTk.PhotoImage(img)
-        label = tk.Label(win, image=photo)
-        label.image = photo  # keep a reference, else Tk garbage-collects it
-        label.pack()
+        try:
+            win = tk.Toplevel(root)
+            win.title(title)
+            n_open = len(win.master.children) - 1
+            win.geometry(f"+{100 + n_open * 30}+{100 + n_open * 30}")
+            photo = ImageTk.PhotoImage(img)
+            label = tk.Label(win, image=photo)
+            label.image = photo  # keep a reference, else Tk garbage-collects it
+            label.pack()
+        except Exception as e:
+            logger.error("Failed to show test preview window: %s", e)
     root.after(200, _test_ui_poll, root)
 
 
@@ -394,7 +397,11 @@ if __name__ == "__main__":
         mqtt.reconnect_delay_set(min_delay=1, max_delay=30)
 
         if TEST_MODE:
-            import tkinter as tk
+            try:
+                import tkinter as tk
+            except ImportError:
+                logger.error("TEST_MODE requires tkinter (install e.g. python3-tk system package)")
+                raise SystemExit(1)
 
             logger.info("TEST MODE: printed labels will be shown in a preview window instead")
             root = tk.Tk()
