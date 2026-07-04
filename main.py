@@ -9,12 +9,13 @@ import ssl
 import tempfile
 import threading
 import time
+import tkinter as tk
 from typing import Annotated, Literal, Union
 import yaml
 
 import paho.mqtt.client as mqtt_client
 import requests
-from PIL import Image
+from PIL import Image, ImageTk
 import usb.core
 from brother_ql.conversion import convert
 from brother_ql.backends.helpers import send
@@ -100,8 +101,36 @@ _cache_lock = threading.Lock()
 # 50ms window to accumulate identical labels into a single print command
 BATCH_WINDOW = 0.05
 
+TEST_MODE = os.environ.get('TEST_MODE', '').lower() in ('1', 'true')
+
 _config: AppConfig | None = None
 print_queue: queue.Queue = queue.Queue()
+
+# TEST_MODE only: worker threads push (Image, title) here; the Tk main loop
+# drains it and opens a preview window. Tk objects must only be touched from
+# the main thread, hence the queue instead of building windows in-place.
+_test_ui_queue: queue.Queue = queue.Queue()
+
+
+def _show_test_window(img: Image.Image, title: str) -> None:
+    _test_ui_queue.put((img, title))
+
+
+def _test_ui_poll(root: tk.Tk) -> None:
+    while True:
+        try:
+            img, title = _test_ui_queue.get_nowait()
+        except queue.Empty:
+            break
+        win = tk.Toplevel(root)
+        win.title(title)
+        n_open = len(win.master.children) - 1
+        win.geometry(f"+{100 + n_open * 30}+{100 + n_open * 30}")
+        photo = ImageTk.PhotoImage(img)
+        label = tk.Label(win, image=photo)
+        label.image = photo  # keep a reference, else Tk garbage-collects it
+        label.pack()
+    root.after(200, _test_ui_poll, root)
 
 
 def cache_get(key: tuple) -> tuple | None:
@@ -204,6 +233,13 @@ def _print_batch(batch: list) -> None:
 
     if count > 1:
         logger.debug("Printing batch of %d identical labels (url=%s)", count, job['url'])
+
+    if TEST_MODE:
+        title = f"TEST batch x{count} {job['width']}x{job['height']} {job['url']}"
+        _show_test_window(label_img, title)
+        logger.info("TEST MODE: displayed %s", title)
+        _confirm_all(print_ids, status=1)
+        return
 
     if isinstance(cfg.printer, BrotherQlPrinterConfig):
         try:
@@ -355,6 +391,14 @@ if __name__ == "__main__":
         mqtt.user_data_set(userdata=config)
         mqtt.reconnect_delay_set(min_delay=1, max_delay=30)
 
-        mqtt.loop_forever()
+        if TEST_MODE:
+            logger.info("TEST MODE: printed labels will be shown in a preview window instead")
+            root = tk.Tk()
+            root.withdraw()  # only Toplevel previews are shown, no root window
+            root.after(0, _test_ui_poll, root)
+            mqtt.loop_start()
+            root.mainloop()
+        else:
+            mqtt.loop_forever()
     else:
         logger.error("Configuration was not provided")
