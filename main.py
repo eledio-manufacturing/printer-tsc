@@ -115,17 +115,17 @@ MULTI_COLUMN_SIZES: dict[tuple[int, int], dict] = {
         'tspl_x': 10,
         'tspl_y': 10,
     },
-    (104, 100): {
+    (106, 106): {
         'cols': 6,
-        'gap_px': 35,       # ERT-AM009X009Z1 tape: 9mm sticker + 2.57mm gap = 11.57mm pitch.
+        'gap_px': 32,       # ERT-AM009X009Z1 tape: 9mm sticker + 2.57mm gap = 11.57mm pitch.
                             # At 300dpi (12 dots/mm per TSPL doc), pitch = 139 dots.
-                            # gap_px = pitch - label_w(104) = 35. (30 was too small -> pitch
+                            # gap_px = pitch - label_w(106) = 32. (30 was too small -> pitch
                             # short by ~5 dots/col, drifting labels left of their die-cut cell,
                             # worse each column -> QR/text past cell edge on later labels.)
         'tspl_size': '71.95 mm,9.5 mm', # width: measured total (SIZE clips print buffer if too small —
                                         # 66.85mm content-only broke printing, so declare full length).
         'tspl_gap': '2.57 mm,0',
-        'tspl_x': 14,
+        'tspl_x': 21,
         'tspl_y': 16,       # real cause of earlier bottom-clip was a stale gap-sensor calibration
                             # (see calibrate.py), not this offset. Post-calibration, plenty of
                             # spare blank space below the text (real usable height > assumed), but
@@ -133,8 +133,6 @@ MULTI_COLUMN_SIZES: dict[tuple[int, int], dict] = {
                             # re-check photo, tune further if top/bottom margin still uneven.
     },
 }
-
-TEST_MODE = os.environ.get('TEST_MODE', '').lower() in ('1', 'true')
 
 TEST_MODE = os.environ.get('TEST_MODE', '').lower() in ('1', 'true')
 
