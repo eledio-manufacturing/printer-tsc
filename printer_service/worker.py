@@ -79,9 +79,16 @@ def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
         label_w, label_h = jobs[0]['image_data'][0].size
         w_bytes = (label_w + 7) // 8
         pitch = label_w + mc_cfg['gap_px']
+        margin_px = mc_cfg.get('margin_px', 0)
+
+        images = [j['image_data'][0] for j in jobs]
+        if margin_px:
+            # Shrink content onto a white border within each label's own cell, so a
+            # few dots of physical column misalignment lands on blank margin instead
+            # of bleeding past the die-cut cell into the printed gap.
+            images = [imaging.inset_margin(img, margin_px) for img in images]
 
         if test_preview.TEST_MODE:
-            images = [j['image_data'][0] for j in jobs]
             composite_img, _ = imaging.compose_columns(images, mc_cfg['gap_px'])
             out_path = f"test_multi_column_{int(time.time())}.png"
             composite_img.save(out_path)
@@ -89,13 +96,16 @@ def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
             _confirm_all(print_ids, status=1)
             return
 
+        bitmaps = [imaging.to_bitmap_bytes(img) for img in images] if margin_px \
+            else [j['image_data'][1] for j in jobs]
+
         # One BITMAP command per label, each at its own physical x offset — no
         # Python-side canvas compositing, so no dependency on gap_px matching
         # the real print pitch (only tspl_x/pitch need to match the tape).
         bitmap_cmds = [
             f"BITMAP {mc_cfg['tspl_x'] + i * pitch},{mc_cfg['tspl_y']},{w_bytes},{label_h},0,".encode()
-            + j['image_data'][1]
-            for i, j in enumerate(jobs)
+            + bmp
+            for i, bmp in enumerate(bitmaps)
         ]
         tspl_prefix = (
             f"DENSITY 13\r\nSPEED 1\r\n"

@@ -15,6 +15,7 @@ MULTI_COLUMN_SIZES: dict[tuple[int, int], dict] = {
         'tspl_gap': '3 mm,0',
         'tspl_x': 10,
         'tspl_y': 10,
+        'margin_px': 0,  # not yet tuned for this tape — raise if edge bleed is seen
     },
     (106, 106): {
         'cols': 6,
@@ -32,6 +33,10 @@ MULTI_COLUMN_SIZES: dict[tuple[int, int], dict] = {
                             # spare blank space below the text (real usable height > assumed), but
                             # tspl_y=6 left ~no top margin -> QR top edge clipped. Pushed down;
                             # re-check photo, tune further if top/bottom margin still uneven.
+        'margin_px': 7,     # ~0.58mm blank buffer on each side of content, absorbs drift so
+                            # bitmap edge doesn't bleed past the die-cut cell into the gap.
+                            # Tune up if black edge bleed still seen, down if content looks
+                            # too shrunk on real prints.
     },
 }
 
