@@ -1,4 +1,5 @@
 import logging
+import time
 
 from PIL import Image
 import usb.core
@@ -49,4 +50,5 @@ def print_labels(label_img: Image.Image, count: int, model: str, identifier: str
         dev = usb.core.find(idVendor=0x04f9)
         if dev:
             dev.reset()
+            time.sleep(1)  # device re-enumerates after reset; let it settle before reopening
     send(instructions, printer_identifier=identifier, blocking=False)
