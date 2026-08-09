@@ -45,7 +45,7 @@ def print_labels(label_img: Image.Image, count: int, model: str, identifier: str
         label_img = label_img.resize(upscale_target, Image.Resampling.LANCZOS)
     label_size, dpi_600 = select_brother_label_size(*label_img.size)
     qlr = BrotherQLRaster(model)
-    instructions = convert(qlr, [label_img] * count, label_size, cut=False, dpi_600=dpi_600, compress=False, hq=True)
+    instructions = convert(qlr, [label_img] * count, label_size, cut=True, dpi_600=dpi_600, compress=False, hq=True)
     if identifier.startswith('usb://'):
         dev = usb.core.find(idVendor=0x04f9)
         if dev:
