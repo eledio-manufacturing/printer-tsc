@@ -20,6 +20,20 @@ STATUS_BITS = {
 }
 STATUS_ERROR_MASK = 0x01 | 0x02 | 0x04 | 0x08 | 0x80
 
+
+class PrinterStatusError(RuntimeError):
+    """Print failed due to a detected printer status, not just a socket error.
+
+    Carries the raw status byte so callers can branch on the specific reason
+    (out_of_paper vs paper_jam vs head_opened, ...) instead of only knowing
+    "it failed" — e.g. to map to a dedicated confirmPrint status code later.
+    """
+
+    def __init__(self, code: int, phase: str):
+        self.code = code
+        self.phase = phase  # "pre_print" or "post_print"
+        super().__init__(f"{phase}: {describe_status(code)}")
+
 # Single-label pixel size -> multi-column strip config.
 # tspl_size / tspl_gap: physical dimensions of the full composite strip (fill in when known).
 # tspl_x / tspl_y: BITMAP dot offsets (same as single-label entry).
@@ -123,7 +137,7 @@ def send_and_verify(address: str, port: int, cmd: bytes, label_count: int, timeo
         s.sendall(b"\x1b!?")
         pre = s.recv(1)[0]
         if pre & STATUS_ERROR_MASK:
-            raise RuntimeError(f"printer not ready: {describe_status(pre)}")
+            raise PrinterStatusError(pre, "pre_print")
 
         s.sendall(cmd)
 
@@ -136,7 +150,7 @@ def send_and_verify(address: str, port: int, cmd: bytes, label_count: int, timeo
             if not (code & 0x20):
                 break
         if code & STATUS_ERROR_MASK:
-            raise RuntimeError(f"print failed: {describe_status(code)}")
+            raise PrinterStatusError(code, "post_print")
         if code & 0x20:
             logger.warning("TSC status poll timed out while still printing (label_count=%d)", label_count)
     finally:

@@ -15,6 +15,19 @@ BATCH_WINDOW = 2
 
 print_queue: queue.Queue = queue.Queue()
 
+# MSS /api/confirmPrint only knows status 1 (ok) / 2 (error) today. When it grows
+# dedicated codes per failure reason, map the tsc.STATUS_BITS name here instead of
+# collapsing every failure to 2 — e.g. {"out_of_paper": 3, "paper_jam": 4, ...}.
+TSC_FAILURE_STATUS: dict[str, int] = {}
+
+
+def _confirm_status_for(e: Exception) -> int:
+    if isinstance(e, tsc.PrinterStatusError):
+        for bit, name in tsc.STATUS_BITS.items():
+            if e.code & bit and name in TSC_FAILURE_STATUS:
+                return TSC_FAILURE_STATUS[name]
+    return 2
+
 
 def _confirm_all(print_ids: list, status: int) -> None:
     cfg = runtime.config
@@ -60,7 +73,7 @@ def _print_batch(batch: list) -> None:
             _confirm_all(print_ids, status=1)
         except Exception as e:
             logger.error("Error printing to TSC: %s", e)
-            _confirm_all(print_ids, status=2)
+            _confirm_all(print_ids, status=_confirm_status_for(e))
 
 
 def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
@@ -95,7 +108,7 @@ def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
         _confirm_all(print_ids, status=1)
     except Exception as e:
         logger.error("Error printing multi-column to TSC: %s", e)
-        _confirm_all(print_ids, status=2)
+        _confirm_all(print_ids, status=_confirm_status_for(e))
 
 
 def print_worker() -> None:
