@@ -55,17 +55,11 @@ def _print_batch(batch: list) -> None:
             logger.error("Error printing to Brother QL: %s", e)
             _confirm_all(print_ids, status=2)
     else:
-        cmd_prefix = tsc.select_print_command(job['msg_rx'])
-        if cmd_prefix:
-            cmd = cmd_prefix.encode() + tsc_bitmap + f"\r\nPRINT 1,{count}\r\n".encode()
-            try:
-                tsc.send_command(cfg.printer.address, cfg.printer.port, cmd)
-                _confirm_all(print_ids, status=1)
-            except Exception as e:
-                logger.error("Error printing to TSC: %s", e)
-                _confirm_all(print_ids, status=2)
-        else:
-            logger.error("No TSC command for dimensions %sx%s", job['width'], job['height'])
+        try:
+            tsc.print_batch(cfg.printer.address, cfg.printer.port, job['msg_rx'], tsc_bitmap, count)
+            _confirm_all(print_ids, status=1)
+        except Exception as e:
+            logger.error("Error printing to TSC: %s", e)
             _confirm_all(print_ids, status=2)
 
 
@@ -76,9 +70,6 @@ def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
     cfg = runtime.config
 
     try:
-        label_w, label_h = jobs[0]['image_data'][0].size
-        w_bytes = (label_w + 7) // 8
-        pitch = label_w + mc_cfg['gap_px']
         margin_px = mc_cfg.get('margin_px', 0)
 
         images = [j['image_data'][0] for j in jobs]
@@ -99,23 +90,7 @@ def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
         bitmaps = [imaging.to_bitmap_bytes(img) for img in images] if margin_px \
             else [j['image_data'][1] for j in jobs]
 
-        # One BITMAP command per label, each at its own physical x offset — no
-        # Python-side canvas compositing, so no dependency on gap_px matching
-        # the real print pitch (only tspl_x/pitch need to match the tape).
-        bitmap_cmds = [
-            f"BITMAP {mc_cfg['tspl_x'] + i * pitch},{mc_cfg['tspl_y']},{w_bytes},{label_h},0,".encode()
-            + bmp
-            for i, bmp in enumerate(bitmaps)
-        ]
-        tspl_prefix = (
-            f"DENSITY 13\r\nSPEED 1\r\n"
-            f"SIZE {mc_cfg['tspl_size']}\r\n"
-            f"GAP {mc_cfg['tspl_gap']}\r\n"
-            f"CLS\r\n"
-        ).encode()
-        cmd = tspl_prefix + b"\r\n".join(bitmap_cmds) + b"\r\nPRINT 1,1\r\n"
-
-        tsc.send_command(cfg.printer.address, cfg.printer.port, cmd)
+        tsc.print_multi_column(cfg.printer.address, cfg.printer.port, images, bitmaps, mc_cfg)
         logger.debug("Multi-column print OK")
         _confirm_all(print_ids, status=1)
     except Exception as e:

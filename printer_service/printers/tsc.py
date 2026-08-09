@@ -75,3 +75,35 @@ def send_command(address: str, port: int, cmd: bytes) -> None:
     s.connect((address, port))
     s.sendall(cmd)
     s.close()
+
+
+def print_batch(address: str, port: int, msg_rx: dict, tsc_bitmap: bytes, count: int) -> None:
+    cmd_prefix = select_print_command(msg_rx)
+    if not cmd_prefix:
+        raise ValueError(f"No TSC command for dimensions {msg_rx.get('width')}x{msg_rx.get('height')}")
+    cmd = cmd_prefix.encode() + tsc_bitmap + f"\r\nPRINT 1,{count}\r\n".encode()
+    send_command(address, port, cmd)
+
+
+def print_multi_column(address: str, port: int, images: list, bitmaps: list, mc_cfg: dict) -> None:
+    label_w, label_h = images[0].size
+    w_bytes = (label_w + 7) // 8
+    pitch = label_w + mc_cfg['gap_px']
+
+    # One BITMAP command per label, each at its own physical x offset — no
+    # Python-side canvas compositing, so no dependency on gap_px matching
+    # the real print pitch (only tspl_x/pitch need to match the tape).
+    bitmap_cmds = [
+        f"BITMAP {mc_cfg['tspl_x'] + i * pitch},{mc_cfg['tspl_y']},{w_bytes},{label_h},0,".encode()
+        + bmp
+        for i, bmp in enumerate(bitmaps)
+    ]
+    tspl_prefix = (
+        f"DENSITY 13\r\nSPEED 1\r\n"
+        f"SIZE {mc_cfg['tspl_size']}\r\n"
+        f"GAP {mc_cfg['tspl_gap']}\r\n"
+        f"CLS\r\n"
+    ).encode()
+    cmd = tspl_prefix + b"\r\n".join(bitmap_cmds) + b"\r\nPRINT 1,1\r\n"
+
+    send_command(address, port, cmd)
