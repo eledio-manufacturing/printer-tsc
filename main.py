@@ -3,18 +3,39 @@
 import logging
 import ssl
 import threading
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 import paho.mqtt.client as mqtt_client
 
 from printer_service import mqtt, runtime, test_preview, worker
-from printer_service.config import get_config
+from printer_service.config import AppConfig, get_config
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s %(levelname)-8s %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
-)
+LOG_FORMAT = '%(asctime)s %(levelname)-8s %(message)s'
+LOG_DATEFMT = '%Y-%m-%d %H:%M:%S'
+
+logging.basicConfig(level=logging.DEBUG, format=LOG_FORMAT, datefmt=LOG_DATEFMT)
 logger = logging.getLogger(__name__)
+
+
+def _configure_file_logging(config: AppConfig) -> None:
+    if not config.logging.path:
+        return
+
+    log_path = Path(config.logging.path)
+    if log_path.suffix == "":
+        log_path = log_path / "printer-tsc.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    handler = RotatingFileHandler(
+        log_path,
+        maxBytes=config.logging.max_bytes,
+        backupCount=config.logging.backup_count,
+    )
+    handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT))
+    logging.getLogger().addHandler(handler)
+    logging.getLogger().setLevel(config.logging.level)
+    logger.info("File logging enabled: %s", log_path)
 
 
 if __name__ == "__main__":
@@ -22,6 +43,7 @@ if __name__ == "__main__":
     config = get_config()
 
     if config:
+        _configure_file_logging(config)
         runtime.config = config
 
         worker_thread = threading.Thread(target=worker.print_worker, daemon=True)
