@@ -24,6 +24,13 @@ class ServiceConfig(BaseModel):
     auth: Auth
 
 
+class LoggingConfig(BaseModel):
+    path: str | None = None
+    level: str = "DEBUG"
+    max_bytes: int = 1024 * 1024
+    backup_count: int = 5
+
+
 class TscPrinterConfig(BaseModel):
     type: Literal['tsc']
     address: str
@@ -47,6 +54,7 @@ class AppConfig(BaseModel):
     erp: ServiceConfig
     mss: ServiceConfig
     printer: PrinterConfig
+    logging: LoggingConfig = LoggingConfig()
 
 
 def get_config() -> AppConfig | None:
