@@ -43,6 +43,8 @@ Subscribes to an MQTT topic, receives print jobs, downloads the label image, and
 
 MQTT uses TLS (`port: 8883`). Auto-reconnect is enabled via `reconnect_delay_set(1, 30)`.
 
+Optional `logging` block (`path`, `level`, `max_bytes`, `backup_count`) enables rotating file logging alongside console (`RotatingFileHandler`). `path` may be a file or a directory (dir gets `printer-tsc.log`); omit for console-only. Wired in `main.py`'s `_configure_file_logging()`.
+
 ### Adding a new TSC label size
 
 Add an `elif` branch in `select_print_command()` in `printer_service/printers/tsc.py` matching the pixel `(width, height)` from the incoming message and supply the corresponding TSPL `SIZE`/`GAP`/`BITMAP` parameters. Reference: `doc/TSPL_TSPL2_Programming.pdf`.

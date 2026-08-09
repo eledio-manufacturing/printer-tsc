@@ -23,3 +23,9 @@ printer:
   # For Brother QL printers
   # identifier: usb://0x04f9:0x2015  # or tcp://192.168.1.1:9100
   # model: QL-500
+logging:
+  # optional; file or dir path (dir gets printer-tsc.log). omit = console only
+  path: /var/log/printer-tsc/service.log
+  level: DEBUG
+  max_bytes: 1048576   # rotate at 1MB
+  backup_count: 5       # keep 5 rotated files
