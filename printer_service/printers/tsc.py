@@ -143,6 +143,29 @@ def send_and_verify(address: str, port: int, cmd: bytes, label_count: int, timeo
         s.close()
 
 
+def poll_health(address: str, port: int, interval: float = 60.0) -> None:
+    """Background loop logging printer status changes, independent of print jobs.
+
+    TODO: log-only means status changes are only visible to someone tailing the
+    log file — no live sink. Wire up a real notification path once one exists
+    (e.g. MQTT publish to a status topic on the already-open broker connection,
+    or POST to an MSS endpoint if one gets added).
+    """
+    last = None
+    while True:
+        try:
+            code = query_status(address, port)
+            if code != last:
+                level = logger.warning if code & STATUS_ERROR_MASK else logger.info
+                level("TSC printer status: %s", describe_status(code))
+                last = code
+        except OSError as e:
+            if last != "unreachable":
+                logger.warning("TSC printer unreachable: %s", e)
+                last = "unreachable"
+        time.sleep(interval)
+
+
 def print_batch(address: str, port: int, msg_rx: dict, tsc_bitmap: bytes, count: int) -> None:
     cmd_prefix = select_print_command(msg_rx)
     if not cmd_prefix:

@@ -35,6 +35,7 @@ class TscPrinterConfig(BaseModel):
     type: Literal['tsc']
     address: str
     port: int
+    health_poll_interval: float = 60.0
 
 
 class BrotherQlPrinterConfig(BaseModel):

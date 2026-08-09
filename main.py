@@ -9,7 +9,8 @@ from pathlib import Path
 import paho.mqtt.client as mqtt_client
 
 from printer_service import mqtt, runtime, test_preview, worker
-from printer_service.config import AppConfig, get_config
+from printer_service.config import AppConfig, TscPrinterConfig, get_config
+from printer_service.printers import tsc as tsc_printer
 
 LOG_FORMAT = '%(asctime)s %(levelname)-8s %(message)s'
 LOG_DATEFMT = '%Y-%m-%d %H:%M:%S'
@@ -48,6 +49,14 @@ if __name__ == "__main__":
 
         worker_thread = threading.Thread(target=worker.print_worker, daemon=True)
         worker_thread.start()
+
+        if isinstance(config.printer, TscPrinterConfig):
+            health_thread = threading.Thread(
+                target=tsc_printer.poll_health,
+                args=(config.printer.address, config.printer.port, config.printer.health_poll_interval),
+                daemon=True,
+            )
+            health_thread.start()
 
         client = mqtt_client.Client(mqtt_client.CallbackAPIVersion.VERSION2)
         client.tls_set(tls_version=ssl.PROTOCOL_TLS_CLIENT)
