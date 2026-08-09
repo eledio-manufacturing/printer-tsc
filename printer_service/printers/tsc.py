@@ -1,7 +1,24 @@
+import logging
 import socket
+import time
+
+logger = logging.getLogger(__name__)
 
 # 2000ms window to collect labels for multi-column compositing
 MULTI_COLUMN_WINDOW = 2
+
+# ESC!? status byte, bits combine (e.g. 0x0B = ribbon+jam+head).
+# pause(0x10)/printing(0x20) are not failures on their own.
+STATUS_BITS = {
+    0x01: "head_opened",
+    0x02: "paper_jam",
+    0x04: "out_of_paper",
+    0x08: "out_of_ribbon",
+    0x10: "pause",
+    0x20: "printing",
+    0x80: "other_error",
+}
+STATUS_ERROR_MASK = 0x01 | 0x02 | 0x04 | 0x08 | 0x80
 
 # Single-label pixel size -> multi-column strip config.
 # tspl_size / tspl_gap: physical dimensions of the full composite strip (fill in when known).
@@ -70,11 +87,60 @@ def select_print_command(data):
     return msg
 
 
-def send_command(address: str, port: int, cmd: bytes) -> None:
+def describe_status(code: int) -> str:
+    if code == 0:
+        return "normal"
+    flags = [name for bit, name in STATUS_BITS.items() if code & bit]
+    return ",".join(flags) if flags else f"unknown(0x{code:02x})"
+
+
+def query_status(address: str, port: int, timeout: float = 2.0) -> int:
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.connect((address, port))
-    s.sendall(cmd)
-    s.close()
+    s.settimeout(timeout)
+    try:
+        s.connect((address, port))
+        s.sendall(b"\x1b!?")
+        data = s.recv(1)
+    finally:
+        s.close()
+    if not data:
+        raise OSError("no response to status query")
+    return data[0]
+
+
+def send_and_verify(address: str, port: int, cmd: bytes, label_count: int, timeout: float = 2.0) -> None:
+    """Send a print command on one TCP session, checking printer status before and after.
+
+    Raw TCP send succeeding does not mean the label actually printed (e.g. paper runs
+    out mid-job) — polling ESC!? on the same connection catches that instead of
+    silently reporting success.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect((address, port))
+
+        s.sendall(b"\x1b!?")
+        pre = s.recv(1)[0]
+        if pre & STATUS_ERROR_MASK:
+            raise RuntimeError(f"printer not ready: {describe_status(pre)}")
+
+        s.sendall(cmd)
+
+        code = 0x20  # assume still printing until polled otherwise
+        deadline = time.monotonic() + 2.0 + 1.5 * label_count
+        while time.monotonic() < deadline:
+            time.sleep(0.25)
+            s.sendall(b"\x1b!?")
+            code = s.recv(1)[0]
+            if not (code & 0x20):
+                break
+        if code & STATUS_ERROR_MASK:
+            raise RuntimeError(f"print failed: {describe_status(code)}")
+        if code & 0x20:
+            logger.warning("TSC status poll timed out while still printing (label_count=%d)", label_count)
+    finally:
+        s.close()
 
 
 def print_batch(address: str, port: int, msg_rx: dict, tsc_bitmap: bytes, count: int) -> None:
@@ -82,7 +148,7 @@ def print_batch(address: str, port: int, msg_rx: dict, tsc_bitmap: bytes, count:
     if not cmd_prefix:
         raise ValueError(f"No TSC command for dimensions {msg_rx.get('width')}x{msg_rx.get('height')}")
     cmd = cmd_prefix.encode() + tsc_bitmap + f"\r\nPRINT 1,{count}\r\n".encode()
-    send_command(address, port, cmd)
+    send_and_verify(address, port, cmd, label_count=count)
 
 
 def print_multi_column(address: str, port: int, images: list, bitmaps: list, mc_cfg: dict) -> None:
@@ -106,4 +172,4 @@ def print_multi_column(address: str, port: int, images: list, bitmaps: list, mc_
     ).encode()
     cmd = tspl_prefix + b"\r\n".join(bitmap_cmds) + b"\r\nPRINT 1,1\r\n"
 
-    send_command(address, port, cmd)
+    send_and_verify(address, port, cmd, label_count=len(bitmaps))
