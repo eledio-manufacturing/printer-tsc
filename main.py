@@ -50,7 +50,7 @@ if __name__ == "__main__":
         worker_thread = threading.Thread(target=worker.print_worker, daemon=True)
         worker_thread.start()
 
-        if isinstance(config.printer, TscPrinterConfig):
+        if isinstance(config.printer, TscPrinterConfig) and config.printer.health_poll_interval:
             health_thread = threading.Thread(
                 target=tsc_printer.poll_health,
                 args=(config.printer.address, config.printer.port, config.printer.health_poll_interval),

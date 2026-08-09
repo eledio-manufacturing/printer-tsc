@@ -35,7 +35,7 @@ class TscPrinterConfig(BaseModel):
     type: Literal['tsc']
     address: str
     port: int
-    health_poll_interval: float = 60.0
+    health_poll_interval: float | None = 60.0  # None/0 disables the background health poll
 
 
 class BrotherQlPrinterConfig(BaseModel):
