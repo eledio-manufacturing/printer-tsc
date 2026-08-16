@@ -54,12 +54,18 @@ def select_brother_label_size(width: int, height: int) -> tuple[str, bool]:
 
 
 def check_status(model: str, identifier: str) -> None:
-    """Query the printer's status and raise if it's not ready to print.
+    """Query the printer's status and raise if it explicitly reports an error.
 
     Raw send() succeeding doesn't mean the label prints (e.g. jam, cover open,
     out of media) — this catches that before the job is sent instead of
     silently reporting success. Network identifiers don't support the status
     command in brother_ql (SNMP-only, unimplemented there), so skip for those.
+
+    The ESC i S status query itself is flaky over this printer's USB link
+    (observed "Received no data" even when a normal print immediately after
+    succeeds) — a failed *query* is not evidence the printer can't print, so
+    it's only logged, not treated as a reason to abort. Only an actual error
+    byte reported back by the printer aborts the job.
     """
     try:
         result, _raw = query_status(printer_model=model, printer_identifier=identifier)
@@ -67,7 +73,8 @@ def check_status(model: str, identifier: str) -> None:
         logger.debug("Status check unsupported for identifier %s, skipping", identifier)
         return
     except BrotherQLError as e:
-        raise BrotherStatusError([str(e)]) from e
+        logger.warning("Status check failed, proceeding without it: %s", e)
+        return
     if result['errors']:
         raise BrotherStatusError(result['errors'])
 
