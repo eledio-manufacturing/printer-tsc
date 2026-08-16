@@ -38,16 +38,6 @@ class PrinterStatusError(RuntimeError):
 # tspl_size / tspl_gap: physical dimensions of the full composite strip (fill in when known).
 # tspl_x / tspl_y: BITMAP dot offsets (same as single-label entry).
 MULTI_COLUMN_SIZES: dict[tuple[int, int], dict] = {
-    (280, 130): {
-        'cols': 5,
-        'gap_px': 20,
-        # Physical strip size — measure on real tape and adjust:
-        'tspl_size': '78 mm,12.7 mm',
-        'tspl_gap': '3 mm,0',
-        'tspl_x': 10,
-        'tspl_y': 10,
-        'margin_px': 0,  # not yet tuned for this tape — raise if edge bleed is seen
-    },
     (106, 106): {
         'cols': 6,
         'gap_px': 32,       # ERT-AM009X009Z1 tape: 9mm sticker + 2.57mm gap = 11.57mm pitch.
