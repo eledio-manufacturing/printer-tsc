@@ -84,13 +84,23 @@ def _print_batch(batch: list) -> None:
             )
             _confirm_all(print_ids[confirmed:], status=2)
     else:
+        confirmed = 0
+
+        def _on_printed(i: int) -> None:
+            nonlocal confirmed
+            logger.info("Printed label %d/%d print_id=%s url=%s", i + 1, count, print_ids[i], job['url'])
+            _confirm_all([print_ids[i]], status=1)
+            confirmed = i + 1
+
         try:
-            tsc.print_batch(cfg.printer.address, cfg.printer.port, job['msg_rx'], tsc_bitmap, count)
-            _confirm_all(print_ids, status=1)
-            logger.info("Batch complete: %d/%d labels printed (url=%s)", count, count, job['url'])
+            tsc.print_batch(cfg.printer.address, cfg.printer.port, job['msg_rx'], tsc_bitmap, count, on_printed=_on_printed)
+            logger.info("Batch complete: %d/%d labels printed (url=%s)", confirmed, count, job['url'])
         except Exception as e:
-            logger.error("Error printing to TSC (url=%s): %s", job['url'], e)
-            _confirm_all(print_ids, status=_confirm_status_for(e))
+            logger.error(
+                "Error printing to TSC after %d/%d labels (url=%s): %s",
+                confirmed, count, job['url'], e,
+            )
+            _confirm_all(print_ids[confirmed:], status=_confirm_status_for(e))
 
 
 def _print_multi_column(jobs: list, mc_cfg: dict) -> None:

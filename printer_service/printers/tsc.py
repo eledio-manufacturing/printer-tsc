@@ -170,12 +170,18 @@ def poll_health(address: str, port: int, interval: float = 60.0) -> None:
         time.sleep(interval)
 
 
-def print_batch(address: str, port: int, msg_rx: dict, tsc_bitmap: bytes, count: int) -> None:
+def print_batch(address: str, port: int, msg_rx: dict, tsc_bitmap: bytes, count: int, on_printed=None) -> None:
     cmd_prefix = select_print_command(msg_rx)
     if not cmd_prefix:
         raise ValueError(f"No TSC command for dimensions {msg_rx.get('width')}x{msg_rx.get('height')}")
-    cmd = cmd_prefix.encode() + tsc_bitmap + f"\r\nPRINT 1,{count}\r\n".encode()
-    send_and_verify(address, port, cmd, label_count=count)
+    # One PRINT 1,1 job per label (own status verification) instead of a single
+    # PRINT 1,count job, so a jam partway through leaves earlier labels confirmed
+    # instead of failing the whole batch -- same reasoning as brother.print_labels.
+    cmd = cmd_prefix.encode() + tsc_bitmap + b"\r\nPRINT 1,1\r\n"
+    for i in range(count):
+        send_and_verify(address, port, cmd, label_count=1)
+        if on_printed:
+            on_printed(i)
 
 
 def print_multi_column(address: str, port: int, images: list, bitmaps: list, mc_cfg: dict) -> None:
