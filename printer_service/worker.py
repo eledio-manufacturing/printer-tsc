@@ -61,12 +61,22 @@ def _print_batch(batch: list) -> None:
         return
 
     if isinstance(cfg.printer, BrotherQlPrinterConfig):
+        # Each label is its own physical print job (see brother.print_labels) -- confirm
+        # print_ids[i] as soon as that specific label is done instead of waiting for the
+        # whole batch, so a jam partway through doesn't leave already-printed labels
+        # unconfirmed.
+        confirmed = 0
+
+        def _on_printed(i: int) -> None:
+            nonlocal confirmed
+            _confirm_all([print_ids[i]], status=1)
+            confirmed = i + 1
+
         try:
-            brother.print_labels(label_img, count, cfg.printer.model, cfg.printer.identifier)
-            _confirm_all(print_ids, status=1)
+            brother.print_labels(label_img, count, cfg.printer.model, cfg.printer.identifier, on_printed=_on_printed)
         except Exception as e:
             logger.error("Error printing to Brother QL: %s", e)
-            _confirm_all(print_ids, status=2)
+            _confirm_all(print_ids[confirmed:], status=2)
     else:
         try:
             tsc.print_batch(cfg.printer.address, cfg.printer.port, job['msg_rx'], tsc_bitmap, count)

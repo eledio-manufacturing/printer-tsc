@@ -79,18 +79,30 @@ def check_status(model: str, identifier: str) -> None:
         raise BrotherStatusError(result['errors'])
 
 
-def print_labels(label_img: Image.Image, count: int, model: str, identifier: str) -> None:
+def print_labels(label_img: Image.Image, count: int, model: str, identifier: str, on_printed=None) -> None:
     upscale_target = DPI_600_UPSCALE.get(label_img.size)
     if upscale_target:
         logger.debug("Upscaling image %s -> %s for 600dpi", label_img.size, upscale_target)
         label_img = label_img.resize(upscale_target, Image.Resampling.LANCZOS)
     label_size, dpi_600 = select_brother_label_size(*label_img.size)
-    qlr = BrotherQLRaster(model)
-    instructions = convert(qlr, [label_img] * count, label_size, cut=True, dpi_600=dpi_600, compress=False, hq=True)
     if identifier.startswith('usb://'):
         dev = usb.core.find(idVendor=0x04f9)
         if dev:
             dev.reset()
             time.sleep(1)  # device re-enumerates after reset; let it settle before reopening
     check_status(model, identifier)
-    send(instructions, printer_identifier=identifier, blocking=False)
+    # A single multi-image raster stream jams reliably on the trailing cut (reproduced
+    # 2/2, with and without a blank trailing label appended -- not a software cut-command
+    # distinction, see raster.py add_print()). Send each label as its own fully
+    # independent job -- separate invalidate/initialize/cut cycle -- and stop as soon as
+    # one doesn't confirm printing, so a jam doesn't silently eat the rest of the batch.
+    for i in range(count):
+        qlr = BrotherQLRaster(model)
+        instructions = convert(qlr, [label_img], label_size, cut=True, dpi_600=dpi_600, compress=False, hq=True)
+        result = send(instructions, printer_identifier=identifier, blocking=True)
+        if not result['did_print']:
+            raise RuntimeError(
+                f"Label {i + 1}/{count} did not confirm printing (printer_state={result['printer_state']})"
+            )
+        if on_printed:
+            on_printed(i)
