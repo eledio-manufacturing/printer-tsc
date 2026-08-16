@@ -39,8 +39,9 @@ def _confirm_all(print_ids: list, status: int) -> None:
                     url=f'{cfg.mss.hostname}/api/confirmPrint?id={pid}&status={status}',
                     auth=auth,
                 )
+                logger.debug("confirmPrint id=%s status=%d sent", pid, status)
             except Exception as e:
-                logger.error("confirmPrint failed for id=%s: %s", pid, e)
+                logger.error("confirmPrint failed for id=%s status=%d: %s", pid, status, e)
 
 
 def _print_batch(batch: list) -> None:
@@ -69,20 +70,26 @@ def _print_batch(batch: list) -> None:
 
         def _on_printed(i: int) -> None:
             nonlocal confirmed
+            logger.info("Printed label %d/%d print_id=%s url=%s", i + 1, count, print_ids[i], job['url'])
             _confirm_all([print_ids[i]], status=1)
             confirmed = i + 1
 
         try:
             brother.print_labels(label_img, count, cfg.printer.model, cfg.printer.identifier, on_printed=_on_printed)
+            logger.info("Batch complete: %d/%d labels printed (url=%s)", confirmed, count, job['url'])
         except Exception as e:
-            logger.error("Error printing to Brother QL: %s", e)
+            logger.error(
+                "Error printing to Brother QL after %d/%d labels (url=%s): %s",
+                confirmed, count, job['url'], e,
+            )
             _confirm_all(print_ids[confirmed:], status=2)
     else:
         try:
             tsc.print_batch(cfg.printer.address, cfg.printer.port, job['msg_rx'], tsc_bitmap, count)
             _confirm_all(print_ids, status=1)
+            logger.info("Batch complete: %d/%d labels printed (url=%s)", count, count, job['url'])
         except Exception as e:
-            logger.error("Error printing to TSC: %s", e)
+            logger.error("Error printing to TSC (url=%s): %s", job['url'], e)
             _confirm_all(print_ids, status=_confirm_status_for(e))
 
 
@@ -114,10 +121,10 @@ def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
             else [j['image_data'][1] for j in jobs]
 
         tsc.print_multi_column(cfg.printer.address, cfg.printer.port, images, bitmaps, mc_cfg)
-        logger.debug("Multi-column print OK")
+        logger.info("Multi-column print OK: %d labels, print_ids=%s", len(print_ids), print_ids)
         _confirm_all(print_ids, status=1)
     except Exception as e:
-        logger.error("Error printing multi-column to TSC: %s", e)
+        logger.error("Error printing multi-column to TSC (print_ids=%s): %s", print_ids, e)
         _confirm_all(print_ids, status=_confirm_status_for(e))
 
 

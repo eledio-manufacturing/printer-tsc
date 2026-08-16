@@ -77,6 +77,7 @@ def check_status(model: str, identifier: str) -> None:
         return
     if result['errors']:
         raise BrotherStatusError(result['errors'])
+    logger.debug("Pre-print status OK: phase=%s media=%s", result.get('phase_type'), result.get('media_type'))
 
 
 def print_labels(label_img: Image.Image, count: int, model: str, identifier: str, on_printed=None) -> None:
