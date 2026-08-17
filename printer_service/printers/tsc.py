@@ -138,8 +138,14 @@ def send_and_verify(address: str, port: int, cmd: bytes, label_count: int, timeo
         deadline = time.monotonic() + 2.0 + 1.5 * label_count
         while time.monotonic() < deadline:
             time.sleep(0.25)
-            s.sendall(b"\x1b!?")
-            code_data = s.recv(1)
+            try:
+                s.sendall(b"\x1b!?")
+                code_data = s.recv(1)
+            except socket.timeout:
+                # TSC firmware doesn't answer ESC!? while the head is actively
+                # printing -- that's normal mid-job, not a failure. Keep polling
+                # until the outer deadline instead of aborting an already-sent job.
+                continue
             if not code_data:
                 raise OSError("no response to post-print status query")
             code = code_data[0]
