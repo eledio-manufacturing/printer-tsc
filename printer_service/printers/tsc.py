@@ -112,7 +112,52 @@ def query_status(address: str, port: int, timeout: float = 2.0) -> int:
     return data[0]
 
 
+def _wait_for_clear(address: str, port: int, poll_interval: float = 3.0, reminder_interval: float = 30.0) -> None:
+    """Block until the printer's status no longer reports an error condition.
+
+    Used after a PrinterStatusError (jam, out of paper, head opened, ...) --
+    those need a physical fix, so there's nothing to do but wait for whoever's
+    at the printer to clear it.
+    """
+    last_reminder = time.monotonic()
+    while True:
+        try:
+            code = query_status(address, port)
+        except OSError:
+            code = None
+        if code is not None and not (code & STATUS_ERROR_MASK):
+            return
+        now = time.monotonic()
+        if now - last_reminder >= reminder_interval:
+            logger.warning(
+                "Still waiting for TSC printer to clear: %s",
+                describe_status(code) if code is not None else "unreachable",
+            )
+            last_reminder = now
+        time.sleep(poll_interval)
+
+
 def send_and_verify(address: str, port: int, cmd: bytes, label_count: int, timeout: float = 2.0) -> None:
+    """Send a print command, retrying on a printer status error until it clears.
+
+    A status error (jam, out of paper, head opened, ...) needs a physical fix
+    -- report it and keep waiting/retrying instead of giving up on the label,
+    so whoever clears the jam doesn't also have to go re-trigger the print.
+    """
+    while True:
+        try:
+            _send_and_verify_once(address, port, cmd, label_count, timeout)
+            return
+        except PrinterStatusError as e:
+            logger.error(
+                "TSC printer error (%s): %s -- waiting for it to clear, will retry this label",
+                e.phase, describe_status(e.code),
+            )
+            _wait_for_clear(address, port)
+            logger.info("TSC printer clear, retrying label")
+
+
+def _send_and_verify_once(address: str, port: int, cmd: bytes, label_count: int, timeout: float = 2.0) -> None:
     """Send a print command on one TCP session, checking printer status before and after.
 
     Raw TCP send succeeding does not mean the label actually printed (e.g. paper runs
