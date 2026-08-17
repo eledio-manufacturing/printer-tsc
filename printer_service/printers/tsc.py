@@ -125,7 +125,10 @@ def send_and_verify(address: str, port: int, cmd: bytes, label_count: int, timeo
         s.connect((address, port))
 
         s.sendall(b"\x1b!?")
-        pre = s.recv(1)[0]
+        pre_data = s.recv(1)
+        if not pre_data:
+            raise OSError("no response to pre-print status query")
+        pre = pre_data[0]
         if pre & STATUS_ERROR_MASK:
             raise PrinterStatusError(pre, "pre_print")
 
@@ -136,7 +139,10 @@ def send_and_verify(address: str, port: int, cmd: bytes, label_count: int, timeo
         while time.monotonic() < deadline:
             time.sleep(0.25)
             s.sendall(b"\x1b!?")
-            code = s.recv(1)[0]
+            code_data = s.recv(1)
+            if not code_data:
+                raise OSError("no response to post-print status query")
+            code = code_data[0]
             if not (code & 0x20):
                 break
         if code & STATUS_ERROR_MASK:
