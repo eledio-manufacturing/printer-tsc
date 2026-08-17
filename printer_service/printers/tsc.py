@@ -158,11 +158,14 @@ def send_and_verify(address: str, port: int, cmd: bytes, label_count: int, timeo
 
 
 def _send_and_verify_once(address: str, port: int, cmd: bytes, label_count: int, timeout: float = 2.0) -> None:
-    """Send a print command on one TCP session, checking printer status before and after.
+    """Send a print command, then poll status on fresh connections until done.
 
     Raw TCP send succeeding does not mean the label actually printed (e.g. paper runs
-    out mid-job) — polling ESC!? on the same connection catches that instead of
-    silently reporting success.
+    out mid-job) — polling ESC!? catches that instead of silently reporting success.
+    The polls use their own short-lived connections (like query_status) rather than
+    reusing the send socket: TSC firmware can close/reset that socket at any point
+    once it starts printing, so treating that socket as long-lived for the poll
+    loop made an ordinary mid-print disconnect look like a fatal error.
     """
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(timeout)
@@ -178,30 +181,26 @@ def _send_and_verify_once(address: str, port: int, cmd: bytes, label_count: int,
             raise PrinterStatusError(pre, "pre_print")
 
         s.sendall(cmd)
-
-        code = 0x20  # assume still printing until polled otherwise
-        deadline = time.monotonic() + 2.0 + 1.5 * label_count
-        while time.monotonic() < deadline:
-            time.sleep(0.25)
-            try:
-                s.sendall(b"\x1b!?")
-                code_data = s.recv(1)
-            except socket.timeout:
-                # TSC firmware doesn't answer ESC!? while the head is actively
-                # printing -- that's normal mid-job, not a failure. Keep polling
-                # until the outer deadline instead of aborting an already-sent job.
-                continue
-            if not code_data:
-                raise OSError("no response to post-print status query")
-            code = code_data[0]
-            if not (code & 0x20):
-                break
-        if code & STATUS_ERROR_MASK:
-            raise PrinterStatusError(code, "post_print")
-        if code & 0x20:
-            logger.warning("TSC status poll timed out while still printing (label_count=%d)", label_count)
     finally:
         s.close()
+
+    code = 0x20  # assume still printing until polled otherwise
+    deadline = time.monotonic() + 2.0 + 1.5 * label_count
+    while time.monotonic() < deadline:
+        time.sleep(0.25)
+        try:
+            code = query_status(address, port, timeout=timeout)
+        except OSError:
+            # Refused / no reply / reset are all normal while the head is
+            # actively printing -- keep polling until the outer deadline
+            # instead of treating an ordinary mid-print disconnect as fatal.
+            continue
+        if not (code & 0x20):
+            break
+    if code & STATUS_ERROR_MASK:
+        raise PrinterStatusError(code, "post_print")
+    if code & 0x20:
+        logger.warning("TSC status poll timed out while still printing (label_count=%d)", label_count)
 
 
 def poll_health(address: str, port: int, interval: float = 60.0) -> None:
