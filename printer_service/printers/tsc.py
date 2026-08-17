@@ -138,11 +138,13 @@ def _wait_for_clear(address: str, port: int, poll_interval: float = 3.0, reminde
 
 
 def send_and_verify(address: str, port: int, cmd: bytes, label_count: int, timeout: float = 2.0) -> None:
-    """Send a print command, retrying on a printer status error until it clears.
+    """Send a print command, retrying until the printer is reachable and error-free.
 
-    A status error (jam, out of paper, head opened, ...) needs a physical fix
-    -- report it and keep waiting/retrying instead of giving up on the label,
-    so whoever clears the jam doesn't also have to go re-trigger the print.
+    A status error (jam, out of paper, head opened, ...) or the printer being
+    briefly unreachable (still settling from the previous label, cable hiccup,
+    ...) both need someone/something else to resolve -- report it and keep
+    waiting/retrying instead of giving up on the label, so clearing the
+    problem doesn't also require going and re-triggering the print.
     """
     while True:
         try:
@@ -155,6 +157,10 @@ def send_and_verify(address: str, port: int, cmd: bytes, label_count: int, timeo
             )
             _wait_for_clear(address, port)
             logger.info("TSC printer clear, retrying label")
+        except OSError as e:
+            logger.error("TSC printer unreachable (%s) -- waiting for it to come back, will retry this label", e)
+            _wait_for_clear(address, port)
+            logger.info("TSC printer reachable again, retrying label")
 
 
 def _send_and_verify_once(address: str, port: int, cmd: bytes, label_count: int, timeout: float = 2.0) -> None:
