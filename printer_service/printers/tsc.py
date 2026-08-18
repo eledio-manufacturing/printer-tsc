@@ -34,6 +34,14 @@ class PrinterStatusError(RuntimeError):
         self.phase = phase  # "pre_print" or "post_print"
         super().__init__(f"{phase}: {describe_status(code)}")
 
+# Chunk size / inter-chunk delay for sending BITMAP payloads. Some TSC print
+# servers appear to corrupt/misalign large single-write payloads (label data
+# shifting a few pixels partway through, reproducibly, across different
+# printer units -- consistent with a firmware receive-buffer issue rather
+# than a data-generation bug). Throttling the send works around that.
+SEND_CHUNK_SIZE = 4096
+SEND_CHUNK_DELAY = 0.02
+
 # Single-label pixel size -> multi-column strip config.
 # tspl_size / tspl_gap: physical dimensions of the full composite strip (fill in when known).
 # tspl_x / tspl_y: BITMAP dot offsets (same as single-label entry).
@@ -163,6 +171,20 @@ def send_and_verify(address: str, port: int, cmd: bytes, label_count: int, timeo
             logger.info("TSC printer reachable again, retrying label")
 
 
+def _send_throttled(s: socket.socket, data: bytes, chunk_size: int = SEND_CHUNK_SIZE, delay: float = SEND_CHUNK_DELAY) -> None:
+    """Send data in small chunks with a pause between them.
+
+    A plain sendall() of the whole BITMAP payload lets the OS/NIC burst it out
+    as fast as the link allows -- some TSC print servers can't keep up and
+    corrupt/misalign the data partway through. Pacing the writes keeps the
+    printer's receive buffer from being overrun.
+    """
+    for i in range(0, len(data), chunk_size):
+        s.sendall(data[i:i + chunk_size])
+        if delay and i + chunk_size < len(data):
+            time.sleep(delay)
+
+
 def _send_and_verify_once(address: str, port: int, cmd: bytes, label_count: int, timeout: float = 2.0) -> None:
     """Send a print command, then poll status on fresh connections until done.
 
@@ -186,7 +208,7 @@ def _send_and_verify_once(address: str, port: int, cmd: bytes, label_count: int,
         if pre & STATUS_ERROR_MASK:
             raise PrinterStatusError(pre, "pre_print")
 
-        s.sendall(cmd)
+        _send_throttled(s, cmd)
     finally:
         s.close()
 
