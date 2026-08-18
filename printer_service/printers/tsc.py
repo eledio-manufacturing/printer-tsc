@@ -34,13 +34,19 @@ class PrinterStatusError(RuntimeError):
         self.phase = phase  # "pre_print" or "post_print"
         super().__init__(f"{phase}: {describe_status(code)}")
 
-# Chunk size / inter-chunk delay for sending BITMAP payloads. Some TSC print
-# servers appear to corrupt/misalign large single-write payloads (label data
-# shifting a few pixels partway through, reproducibly, across different
-# printer units -- consistent with a firmware receive-buffer issue rather
-# than a data-generation bug). Throttling the send works around that.
-SEND_CHUNK_SIZE = 4096
-SEND_CHUNK_DELAY = 0.02
+# Chunk size / inter-chunk delay for sending BITMAP payloads. Label data can
+# intermittently shift a few pixels partway through printing -- confirmed via
+# repeated identical test prints to be content-independent (same bytes at the
+# same offsets printed clean on one run, corrupted on another) and to only
+# show up once the printer was moved from a switched connection to a direct
+# Pi<->printer Ethernet link. Working theory: a switch's store-and-forward
+# buffering naturally paces/spaces frames; without one, the host can burst
+# data faster than the printer's embedded receive/print pipeline drains it,
+# and something downstream of TCP (so invisible to Ethernet-level error
+# counters) intermittently drops or misaligns bytes under that burst.
+# Pacing the writes in software emulates what the switch used to do.
+SEND_CHUNK_SIZE = 512
+SEND_CHUNK_DELAY = 0.05
 
 # Single-label pixel size -> multi-column strip config.
 # tspl_size / tspl_gap: physical dimensions of the full composite strip (fill in when known).
