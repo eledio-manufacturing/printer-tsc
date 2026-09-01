@@ -169,7 +169,12 @@ def print_worker() -> None:
                     logger.debug("Multi-column: padded to %d cols (%d unique labels)", n_cols, len(set(j['url'] for j in batch)))
                 _print_multi_column(batch, mc_cfg)
             else:
-                batch = [job]
+                # Group jobs by (url, width, height) instead of requeuing a mismatch
+                # to the tail -- with interleaved jobs for several items (e.g. 2 copies
+                # each, arriving round-robin), requeuing to the tail printed all first
+                # copies, then all second copies, instead of each item's copies together.
+                key = (job['url'], w, h)
+                groups: dict = {key: [job]}
                 deadline = time.monotonic() + BATCH_WINDOW
                 while True:
                     remaining = deadline - time.monotonic()
@@ -177,15 +182,11 @@ def print_worker() -> None:
                         break
                     try:
                         next_job = print_queue.get(timeout=remaining)
-                        if (next_job['url'] == job['url']
-                                and next_job['width'] == w
-                                and next_job['height'] == h):
-                            batch.append(next_job)
-                        else:
-                            print_queue.put(next_job)
-                            break
                     except queue.Empty:
                         break
-                _print_batch(batch)
+                    next_key = (next_job['url'], next_job['width'], next_job['height'])
+                    groups.setdefault(next_key, []).append(next_job)
+                for batch in groups.values():
+                    _print_batch(batch)
         except Exception as e:
             logger.error("Print worker unhandled error: %s", e)
