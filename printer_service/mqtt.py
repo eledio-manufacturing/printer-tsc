@@ -1,5 +1,6 @@
 import json
 import logging
+from urllib.parse import quote_plus
 
 import requests
 
@@ -32,7 +33,7 @@ def message_handle(client, config: AppConfig, message):
                 auth = (config.mss.auth.username, config.mss.auth.password)
                 try:
                     requests.post(
-                        url=f'{config.mss.hostname}/api/confirmPrint?id={print_id}&status=2',
+                        url=f'{config.mss.hostname}/api/confirmPrint?id={print_id}&status=2&note={quote_plus(str(e))}',
                         auth=auth,
                     )
                 except Exception as ce:

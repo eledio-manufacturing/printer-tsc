@@ -1,6 +1,7 @@
 import logging
 import queue
 import time
+from urllib.parse import quote_plus
 
 import requests
 
@@ -29,17 +30,18 @@ def _confirm_status_for(e: Exception) -> int:
     return 2
 
 
-def _confirm_all(print_ids: list, status: int) -> None:
+def _confirm_all(print_ids: list, status: int, note: str | None = None) -> None:
     cfg = runtime.config
     auth = (cfg.mss.auth.username, cfg.mss.auth.password)
+    note_qs = f'&note={quote_plus(note)}' if note else ''
     for pid in print_ids:
         if pid:
             try:
                 requests.post(
-                    url=f'{cfg.mss.hostname}/api/confirmPrint?id={pid}&status={status}',
+                    url=f'{cfg.mss.hostname}/api/confirmPrint?id={pid}&status={status}{note_qs}',
                     auth=auth,
                 )
-                logger.debug("confirmPrint id=%s status=%d sent", pid, status)
+                logger.debug("confirmPrint id=%s status=%d note=%r sent", pid, status, note)
             except Exception as e:
                 logger.error("confirmPrint failed for id=%s status=%d: %s", pid, status, e)
 
@@ -82,7 +84,7 @@ def _print_batch(batch: list) -> None:
                 "Error printing to Brother QL after %d/%d labels (url=%s): %s",
                 confirmed, count, job['url'], e,
             )
-            _confirm_all(print_ids[confirmed:], status=2)
+            _confirm_all(print_ids[confirmed:], status=2, note=str(e))
     else:
         confirmed = 0
 
@@ -100,7 +102,7 @@ def _print_batch(batch: list) -> None:
                 "Error printing to TSC after %d/%d labels (url=%s): %s",
                 confirmed, count, job['url'], e,
             )
-            _confirm_all(print_ids[confirmed:], status=_confirm_status_for(e))
+            _confirm_all(print_ids[confirmed:], status=_confirm_status_for(e), note=str(e))
 
 
 def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
@@ -135,7 +137,7 @@ def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
         _confirm_all(print_ids, status=1)
     except Exception as e:
         logger.error("Error printing multi-column to TSC (print_ids=%s): %s", print_ids, e)
-        _confirm_all(print_ids, status=_confirm_status_for(e))
+        _confirm_all(print_ids, status=_confirm_status_for(e), note=str(e))
 
 
 def print_worker() -> None:
