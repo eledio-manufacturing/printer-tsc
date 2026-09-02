@@ -126,55 +126,15 @@ def query_status(address: str, port: int, timeout: float = 2.0) -> int:
     return data[0]
 
 
-def _wait_for_clear(address: str, port: int, poll_interval: float = 3.0, reminder_interval: float = 30.0) -> None:
-    """Block until the printer's status no longer reports an error condition.
-
-    Used after a PrinterStatusError (jam, out of paper, head opened, ...) --
-    those need a physical fix, so there's nothing to do but wait for whoever's
-    at the printer to clear it.
-    """
-    last_reminder = time.monotonic()
-    while True:
-        try:
-            code = query_status(address, port)
-        except OSError:
-            code = None
-        if code is not None and not (code & STATUS_ERROR_MASK):
-            return
-        now = time.monotonic()
-        if now - last_reminder >= reminder_interval:
-            logger.warning(
-                "Still waiting for TSC printer to clear: %s",
-                describe_status(code) if code is not None else "unreachable",
-            )
-            last_reminder = now
-        time.sleep(poll_interval)
-
-
 def send_and_verify(address: str, port: int, cmd: bytes, label_count: int, timeout: float = 2.0) -> None:
-    """Send a print command, retrying until the printer is reachable and error-free.
+    """Send a print command and verify it printed cleanly.
 
     A status error (jam, out of paper, head opened, ...) or the printer being
-    briefly unreachable (still settling from the previous label, cable hiccup,
-    ...) both need someone/something else to resolve -- report it and keep
-    waiting/retrying instead of giving up on the label, so clearing the
-    problem doesn't also require going and re-triggering the print.
+    unreachable both need a physical fix -- raise immediately instead of
+    blocking the whole print queue waiting for it to clear, so the caller can
+    give up the label and report the failure (with reason) to MSS right away.
     """
-    while True:
-        try:
-            _send_and_verify_once(address, port, cmd, label_count, timeout)
-            return
-        except PrinterStatusError as e:
-            logger.error(
-                "TSC printer error (%s): %s -- waiting for it to clear, will retry this label",
-                e.phase, describe_status(e.code),
-            )
-            _wait_for_clear(address, port)
-            logger.info("TSC printer clear, retrying label")
-        except OSError as e:
-            logger.error("TSC printer unreachable (%s) -- waiting for it to come back, will retry this label", e)
-            _wait_for_clear(address, port)
-            logger.info("TSC printer reachable again, retrying label")
+    _send_and_verify_once(address, port, cmd, label_count, timeout)
 
 
 def _send_throttled(s: socket.socket, data: bytes, chunk_size: int = SEND_CHUNK_SIZE, delay: float = SEND_CHUNK_DELAY) -> None:
