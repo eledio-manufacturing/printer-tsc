@@ -2,7 +2,7 @@ import threading
 import time
 
 # Image cache: (url, width, height) -> (monotonic_time, (label_img_L, tsc_bitmap_bytes))
-CACHE_TTL = 300  # seconds
+CACHE_TTL = 5  # seconds
 _cache: dict[tuple, tuple[float, tuple]] = {}
 _cache_lock = threading.Lock()
 
