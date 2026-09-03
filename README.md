@@ -2,6 +2,8 @@
 
 This service supports both TSC and Brother QL label printers.
 
+See [DOCUMENTATION.md](DOCUMENTATION.md) for a detailed explanation of how the service works, including a non-programmer overview.
+
 ## Setup
 
 ```bash
