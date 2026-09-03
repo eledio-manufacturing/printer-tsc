@@ -30,7 +30,6 @@ printer:
   type: brother_ql
   identifier: usb://0x04f9:0x2015  # or tcp://192.168.1.1:9100
   model: QL-500
-  label_size: 62
 ```
 
 ### Logging
