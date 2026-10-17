@@ -197,3 +197,7 @@ Setting `TEST_MODE=1` (or `true`) in the environment before starting the process
 - **TSC gap-sensor calibration is stored on the printer itself**, independent of the `SIZE`/`GAP` sent per job — swapping tape rolls without recalibrating can silently truncate prints past the *old* tape's memorized length. `_tools/calibrate.py` is a one-off script to run after a tape swap: sends `SIZE`/`GAP`/`GAPDETECT` so the printer re-learns real physical length/gap from the sensor.
 - **Failure granularity is currently flat** — both TSC and Brother failures collapse to MSS `status=2`; the richer `PrinterStatusError`/`BrotherStatusError` reasons are logged and put in the `note` field, but aren't yet mapped to distinct MSS status codes (would need MSS API support first).
 - **No automated tests, no linter** configured for this repo (per `CLAUDE.md`).
+
+## Planned: data for the MSS printer view
+
+MSS plans a "Tiskárny" overview (printer status, consumables, print history, restart/test-print actions — [prototype](https://claude.ai/code/artifact/e5e468ca-01ef-4088-9e34-8bd3c97ae31d)). The data this service would need to provide for it is specified in [`doc/MSS_PRINTER_VIEW_DATA.md`](https://github.com/eledio-manufacturing/printer-tsc/blob/docs/mss-printer-view-spec/doc/MSS_PRINTER_VIEW_DATA.md) on the `docs/mss-printer-view-spec` branch.
