@@ -106,8 +106,7 @@ def _print_batch(batch: list) -> None:
 
 
 def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
-    # jobs may contain the same job repeated (batch padded to n_cols) -> dedupe
-    # so _confirm_all doesn't POST /api/confirmPrint more than once per id.
+    # Dedupe so _confirm_all doesn't POST /api/confirmPrint more than once per id.
     print_ids = list(dict.fromkeys(j['print_id'] for j in jobs if j['print_id']))
     cfg = runtime.config
 
@@ -122,7 +121,10 @@ def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
             images = [imaging.inset_margin(img, margin_px) for img in images]
 
         if test_preview.TEST_MODE:
-            composite_img, _ = imaging.compose_columns(images, mc_cfg['gap_px'])
+            # Pad preview with blank cells so it shows the full physical row.
+            blank = imaging.Image.new('L', images[0].size, color=255)
+            preview = images + [blank] * (mc_cfg['cols'] - len(images))
+            composite_img, _ = imaging.compose_columns(preview, mc_cfg['gap_px'])
             out_path = f"test_multi_column_{int(time.time())}.png"
             composite_img.save(out_path)
             logger.info("TEST MODE: saved composite to %s", out_path)
@@ -164,11 +166,10 @@ def print_worker() -> None:
                             break
                     except queue.Empty:
                         break
-                # Pad to n_cols by repeating last label
-                while len(batch) < n_cols:
-                    batch.append(batch[-1])
-                if len(batch) > len(set(j['url'] for j in batch)):
-                    logger.debug("Multi-column: padded to %d cols (%d unique labels)", n_cols, len(set(j['url'] for j in batch)))
+                # Partial row: print only the received labels; remaining columns
+                # stay blank (each BITMAP is placed at its own column offset after CLS).
+                if len(batch) < n_cols:
+                    logger.debug("Multi-column: partial row %d/%d cols", len(batch), n_cols)
                 _print_multi_column(batch, mc_cfg)
             else:
                 # Group jobs by (url, width, height) instead of requeuing a mismatch
