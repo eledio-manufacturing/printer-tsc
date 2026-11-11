@@ -25,8 +25,9 @@ Think of it as a mail courier sitting next to the printer, waiting for envelopes
    waits about 2 seconds, collects them, and sends them to the printer
    as one batch instead of printing each separately and scrambling the
    order. For small labels on a multi-column roll (6 labels side by
-   side on one strip of tape), it waits until it has collected a full
-   row before printing.
+   side on one strip of tape), it waits up to about 2 seconds to fill
+   a row; if fewer labels arrive, it prints just those and leaves the
+   remaining positions in the row blank.
 6. **It sends the job to the printer and verifies it actually printed.**
    The program doesn't just trust that the data was sent — it asks the
    printer "do you have paper? are you jammed? out of ribbon?". If
@@ -132,7 +133,7 @@ Before fetching, `message_handle` checks an in-process cache keyed on `(url, wid
 
 Two more helpers used only for **multi-column** TSC printing (small labels ganged side-by-side on one tape run):
 - `inset_margin(img, margin_px)`: shrinks the label content onto a white canvas of the same size, leaving a blank margin — absorbs a few dots of column-to-column physical misalignment so content doesn't bleed past the die-cut cell into the printed gap.
-- `compose_columns(images, gap_px)`: composites several label images side by side with a gap between them, padding total width to a byte boundary. (In practice `worker._print_multi_column` currently prints each column as a separate `BITMAP` command at its own offset rather than using this composite — `compose_columns` is retained for the `TEST_MODE` preview path, which needs a single flattened image to save/show.)
+- `compose_columns(images, gap_px)`: composites several label images side by side with a gap between them, padding total width to a byte boundary. (In practice `worker._print_multi_column` currently prints each column as a separate `BITMAP` command at its own offset rather than using this composite — `compose_columns` is retained for the `TEST_MODE` preview path, which needs a single flattened image to save/show; for a partial row the preview is padded with white cells so it shows the full physical row.)
 
 ### 4. The print worker and batching (`printer_service/worker.py`)
 
@@ -140,7 +141,7 @@ All print jobs pass through a single `queue.Queue` (`worker.print_queue`) consum
 
 **a) Ordinary batching (`BATCH_WINDOW = 2` seconds).** After pulling a job off the queue, the worker waits up to 2 seconds accumulating more jobs, **grouped by `(url, width, height)`**. If jobs for several different labels arrive interleaved (e.g. two copies each of labels A and B, arriving A,B,A,B), they're grouped so all of A's copies print together and all of B's print together — rather than requeuing a mismatched job to the tail of the queue, which used to cause exactly the interleaved A,B,A,B print order (see git history: `963299f fix(worker): group-by-key batching instead of requeue-to-tail`). Each group is handed to `_print_batch`.
 
-**b) Multi-column batching.** Some label sizes are configured in `tsc.MULTI_COLUMN_SIZES` as belonging to a physical multi-up tape layout (currently only `(106, 106)` pixels → a 6-column tape). For those, the worker instead waits up to `tsc.MULTI_COLUMN_WINDOW` (2s) trying to collect up to `n_cols` jobs of that same size, pads the batch to `n_cols` by repeating the last label if fewer arrived in time, and hands it to `_print_multi_column`, which builds one `BITMAP` command per physical column at its own x-offset in a single TSPL print job (not a Python-side composited image — this keeps the gap/pitch used for confirming print math decoupled from the true physical tape pitch baked into `tspl_x`/pitch).
+**b) Multi-column batching.** Some label sizes are configured in `tsc.MULTI_COLUMN_SIZES` as belonging to a physical multi-up tape layout (currently only `(106, 106)` pixels → a 6-column tape). For those, the worker instead waits up to `tsc.MULTI_COLUMN_WINDOW` (2s) trying to collect up to `n_cols` jobs of that same size and hands whatever arrived (1 to `n_cols` jobs) as-is to `_print_multi_column`, which builds one `BITMAP` command per label at its column's x-offset in a single TSPL print job (not a Python-side composited image — this keeps the gap/pitch used for confirming print math decoupled from the true physical tape pitch baked into `tspl_x`/pitch). A partial row is **not** padded: only the received labels get a `BITMAP`, in columns 0..k-1, and the remaining columns stay blank because `CLS` clears the buffer first (earlier versions repeated the last label to fill the row, printing unwanted duplicates). The whole row of stickers is still fed, so the unused ones are left blank on the tape.
 
 `_print_batch` (non-multi-column path):
 - **TEST_MODE**: shows the image in a Tk window, confirms all `print_id`s with status 1, returns — no real printer touched.
@@ -168,7 +169,7 @@ Status byte bit meaning (`STATUS_BITS`): `head_opened`, `paper_jam`, `out_of_pap
 
 **Background health poll (`poll_health`)**: independent of any print job, queries status every `health_poll_interval` seconds and logs on *change* only (not every poll), distinguishing "unreachable" (socket-level failure) from a reported status code. Currently log-only — no live notification sink exists yet (flagged as a TODO in the code: candidates are an MQTT publish on the existing broker connection, or a new MSS endpoint).
 
-**Multi-column printing (`print_multi_column`)**: builds one `BITMAP` TSPL command per column, each at x-offset `tspl_x + i * pitch` (`pitch = label_w + gap_px`), concatenated into a single `SIZE`/`GAP`/`CLS`/multiple-`BITMAP`/`PRINT 1,1` command sent as one job — so the whole strip is one physical print, verified once via `send_and_verify` with `label_count = number of columns` (affects the timeout deadline, not the pass/fail logic).
+**Multi-column printing (`print_multi_column`)**: builds one `BITMAP` TSPL command per label, each at x-offset `tspl_x + i * pitch` (`pitch = label_w + gap_px`), concatenated into a single `SIZE`/`GAP`/`CLS`/multiple-`BITMAP`/`PRINT 1,1` command sent as one job — so the whole strip is one physical print, verified once via `send_and_verify` with `label_count` = number of labels actually sent, ≤ columns (affects the timeout deadline, not the pass/fail logic).
 
 The one currently-configured multi-column size, `(106, 106)` px, is a 6-column tape (`ERT-AM009X009Z1`, 9mm sticker + 2.57mm gap) — the numeric constants in `MULTI_COLUMN_SIZES` (`gap_px=32`, `tspl_size`, `tspl_x=21`, `tspl_y=16`, `margin_px=7`) each carry an inline comment explaining a specific calibration mistake that produced that value (e.g. `tspl_y` was tuned up after QR-code top-edge clipping; `margin_px` absorbs physical column drift).
 
