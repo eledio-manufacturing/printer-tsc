@@ -16,5 +16,11 @@ def cache_get(key: tuple) -> tuple | None:
 
 
 def cache_set(key: tuple, value: tuple) -> None:
+    now = time.monotonic()
     with _cache_lock:
-        _cache[key] = (time.monotonic(), value)
+        # cache_get only ignores expired entries, it never removes them -- without this
+        # sweep every unique URL kept its image + bitmap (~hundreds of KB) in memory for
+        # the life of the process. With a 5 s TTL only a handful of entries survive.
+        for k in [k for k, (t, _) in _cache.items() if now - t >= CACHE_TTL]:
+            del _cache[k]
+        _cache[key] = (now, value)
