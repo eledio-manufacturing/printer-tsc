@@ -6,7 +6,7 @@ from urllib.parse import quote_plus
 import requests
 
 from printer_service import imaging, runtime, test_preview
-from printer_service.config import BrotherQlPrinterConfig
+from printer_service.config import BrotherQlPrinterConfig, TscPrinterConfig
 from printer_service.printers import brother, tsc
 
 logger = logging.getLogger(__name__)
@@ -150,12 +150,27 @@ def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
         confirm_all(print_ids, status=_confirm_status_for(e), note=str(e))
 
 
+def _multi_column_cfg(width: int, height: int) -> dict | None:
+    # Multi-column tape layouts are TSC-only. Without this check a Brother config hit
+    # tsc.print_multi_column for these sizes and failed on the missing printer address.
+    if not isinstance(runtime.config.printer, TscPrinterConfig):
+        return None
+    return tsc.MULTI_COLUMN_SIZES.get((width, height))
+
+
 def print_worker() -> None:
+    # A job pulled off the queue during a batching window that belongs to a different
+    # batch. It is processed first on the next iteration -- put() would send it to the
+    # tail of the queue, behind everything that arrived in the meantime.
+    held = None
     while True:
         try:
-            job = print_queue.get()
+            if held is not None:
+                job, held = held, None
+            else:
+                job = print_queue.get()
             w, h = job['width'], job['height']
-            mc_cfg = tsc.MULTI_COLUMN_SIZES.get((w, h))
+            mc_cfg = _multi_column_cfg(w, h)
 
             if mc_cfg:
                 n_cols = mc_cfg['cols']
@@ -167,12 +182,12 @@ def print_worker() -> None:
                         break
                     try:
                         next_job = print_queue.get(timeout=remaining)
-                        if next_job['width'] == w and next_job['height'] == h:
-                            batch.append(next_job)
-                        else:
-                            print_queue.put(next_job)
-                            break
                     except queue.Empty:
+                        break
+                    if next_job['width'] == w and next_job['height'] == h:
+                        batch.append(next_job)
+                    else:
+                        held = next_job
                         break
                 # Partial row: print only the received labels; remaining columns
                 # stay blank (each BITMAP is placed at its own column offset after CLS).
@@ -194,6 +209,12 @@ def print_worker() -> None:
                     try:
                         next_job = print_queue.get(timeout=remaining)
                     except queue.Empty:
+                        break
+                    if _multi_column_cfg(next_job['width'], next_job['height']):
+                        # Multi-column sizes have no single-label TSPL command: grouped
+                        # here they went to _print_batch and failed. Close this window and
+                        # let the next iteration start a multi-column row with it.
+                        held = next_job
                         break
                     next_key = (next_job['url'], next_job['width'], next_job['height'])
                     groups.setdefault(next_key, []).append(next_job)
