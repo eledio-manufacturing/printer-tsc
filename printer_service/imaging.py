@@ -14,8 +14,10 @@ HTTP_TIMEOUT = (5, 30)
 
 
 def _same_origin(url: str, base: str) -> bool:
+    # Only called for https:// URLs; treat an explicit :443 like no port, so
+    # "https://mss.example.com:443/x" still matches "https://mss.example.com".
     a, b = urlsplit(url), urlsplit(base)
-    return (a.scheme, a.hostname, a.port) == (b.scheme, b.hostname, b.port)
+    return (a.scheme, a.hostname, a.port or 443) == (b.scheme, b.hostname, b.port or 443)
 
 
 def fetch_image(url: str) -> tuple[Image.Image, bytes]:
