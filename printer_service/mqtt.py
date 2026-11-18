@@ -43,7 +43,7 @@ def _handle_message(config: AppConfig, message) -> None:
             cache_set(key, image_data)
         except Exception as e:
             logger.error("Failed to fetch/convert image %s: %s", url, e)
-            worker.confirm_all([print_id], status=2, note=str(e))
+            worker.confirm_all([print_id], status=2, note=worker.error_note(e))
             return
     else:
         logger.debug("Cache hit for %s %dx%d", url, width, height)

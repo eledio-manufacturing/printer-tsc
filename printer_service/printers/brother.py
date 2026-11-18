@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 
 from PIL import Image
@@ -60,6 +61,34 @@ def _usb_ids(identifier: str) -> dict:
     if product:
         ids['idProduct'] = int(product, 16)
     return ids
+
+
+def check_usb_access(identifier: str) -> None:
+    """Log at startup why a usb:// printer will not be usable, instead of at the first print.
+
+    Only logs, never exits: the printer may be plugged in or the udev rule fixed later,
+    and the print path reports the failure to MSS anyway.
+    """
+    if not identifier.startswith('usb://'):
+        return
+    try:
+        dev = usb.core.find(**_usb_ids(identifier))
+    except usb.core.NoBackendError:
+        logger.error("Brother USB: libusb not found (install libusb-1.0-0)")
+        return
+    except ValueError as e:
+        logger.error("Brother USB: malformed identifier %r: %s", identifier, e)
+        return
+    if dev is None:
+        logger.error("Brother USB: no device %s found (unplugged or powered off?)", identifier)
+        return
+    # Enumeration works without permissions; opening the device does not. Check the
+    # device node directly so this has no side effect on the printer.
+    node = f"/dev/bus/usb/{dev.bus:03d}/{dev.address:03d}"
+    if os.path.exists(node) and not os.access(node, os.R_OK | os.W_OK):
+        logger.error("Brother USB: no read/write access to %s (missing udev rule or group?)", node)
+        return
+    logger.info("Brother USB: device %s found", identifier)
 
 
 def check_status(model: str, identifier: str) -> None:

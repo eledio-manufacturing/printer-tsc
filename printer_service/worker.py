@@ -34,6 +34,12 @@ def _confirm_status_for(e: Exception) -> int:
     return 2
 
 
+def error_note(e: Exception) -> str:
+    # Some exceptions carry no message (e.g. brother_ql's BrotherQLUnknownModel()):
+    # str(e) is then '' and MSS got a failure with an empty note.
+    return str(e) or repr(e)
+
+
 def confirm_all(print_ids: list, status: int, note: str | None = None) -> None:
     cfg = runtime.config
     auth = (cfg.mss.auth.username, cfg.mss.auth.password)
@@ -92,7 +98,7 @@ def _print_batch(batch: list) -> None:
                 "Error printing to Brother QL after %d/%d labels (url=%s): %s",
                 confirmed, count, job['url'], e,
             )
-            confirm_all(print_ids[confirmed:], status=2, note=str(e))
+            confirm_all(print_ids[confirmed:], status=2, note=error_note(e))
     else:
         confirmed = 0
 
@@ -110,7 +116,7 @@ def _print_batch(batch: list) -> None:
                 "Error printing to TSC after %d/%d labels (url=%s): %s",
                 confirmed, count, job['url'], e,
             )
-            confirm_all(print_ids[confirmed:], status=_confirm_status_for(e), note=str(e))
+            confirm_all(print_ids[confirmed:], status=_confirm_status_for(e), note=error_note(e))
 
 
 def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
@@ -147,7 +153,7 @@ def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
         confirm_all(print_ids, status=1)
     except Exception as e:
         logger.error("Error printing multi-column to TSC (print_ids=%s): %s", print_ids, e)
-        confirm_all(print_ids, status=_confirm_status_for(e), note=str(e))
+        confirm_all(print_ids, status=_confirm_status_for(e), note=error_note(e))
 
 
 def _multi_column_cfg(width: int, height: int) -> dict | None:
