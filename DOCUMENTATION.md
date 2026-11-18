@@ -77,13 +77,15 @@ MQTT broker --publish--> printer-tsc --HTTP GET--> ERP or MSS (image)
 
 On startup:
 
-1. Loads and validates `config/config.yaml` into a Pydantic `AppConfig` (`printer_service/config.py`). The path is resolved relative to the project directory (`config.CONFIG_PATH`), not the working directory. If loading/validation fails, the process logs an error and exits with code 1 (so systemd `Restart=on-failure` and monitoring notice it).
-2. Stores that config in `printer_service/runtime.py`'s module-level `config` variable — a process-wide singleton read by every other module (avoids threading config through every function call).
-3. Optionally configures rotating file logging (`_configure_file_logging`), in addition to the console logging that's always on.
-4. Starts the background **print worker** thread (`worker.print_worker`) — this is the thread that actually talks to the printer.
-5. If using a TSC printer with `health_poll_interval` set, starts a second background thread (`tsc.poll_health`) that periodically queries printer status independent of any print job, and logs status changes (paper out, jam, head open, etc.).
-6. Connects to the MQTT broker over TLS (`connect_async`), wires up callbacks, and subscribes to the configured topic.
-7. If `TEST_MODE=1` env var is set, opens a Tk preview window instead of driving a real printer (see Test mode below). Otherwise runs `client.loop_forever(retry_first_connection=True)` — the process's main loop is just the MQTT client loop; everything else happens in background threads and MQTT callback invocations.
+1. Takes an exclusive `fcntl.flock` on `config/.printer-tsc.lock` (`_acquire_instance_lock`). If another instance already holds it, logs an error and exits with code 1 — two instances on one config would both consume every MQTT message and print each label twice. The kernel releases the lock when the process dies, so a crash leaves nothing stale. If the lock file can't be created (unwritable config dir), it only logs a warning and continues.
+2. Loads and validates `config/config.yaml` into a Pydantic `AppConfig` (`printer_service/config.py`). The path is resolved relative to the project directory (`config.CONFIG_PATH`), not the working directory. If loading/validation fails, the process logs an error and exits with code 1 (so systemd `Restart=on-failure` and monitoring notice it).
+3. Stores that config in `printer_service/runtime.py`'s module-level `config` variable — a process-wide singleton read by every other module (avoids threading config through every function call).
+4. Applies `logging.level` (default `INFO`) to all logging, console included — under systemd the console goes to journald on the same SD card — and optionally configures rotating file logging (`_configure_file_logging`).
+5. For a Brother `usb://` printer, `brother.check_usb_access` logs right away if libusb is missing, the device isn't found, or its `/dev/bus/usb/…` node isn't readable/writable (missing udev rule or group). It only logs, never exits: the printer can be plugged in or the permission fixed later.
+6. Starts the background **print worker** thread (`worker.print_worker`) — this is the thread that actually talks to the printer.
+7. If using a TSC printer with `health_poll_interval` set, starts a second background thread (`tsc.poll_health`) that periodically queries printer status independent of any print job, and logs status changes (paper out, jam, head open, etc.).
+8. Connects to the MQTT broker over TLS (`connect_async`), wires up callbacks, and subscribes to the configured topic.
+9. If `TEST_MODE=1` env var is set, opens a Tk preview window instead of driving a real printer (see Test mode below). Otherwise runs `client.loop_forever(retry_first_connection=True)` — the process's main loop is just the MQTT client loop; everything else happens in background threads and MQTT callback invocations.
 
 Auto-reconnect to the MQTT broker is handled by `paho-mqtt`'s `reconnect_delay_set(1, 30)`. Thanks to `connect_async` + `retry_first_connection=True` this backoff also covers the **first** connection, so a broker or network that isn't up yet at boot is retried instead of crashing the process (plain `connect()` raises synchronously).
 
@@ -99,7 +101,7 @@ Top-level sections:
 - **`printer`**: a discriminated union on `type`:
   - `type: tsc` — `address`, `port` (raw TCP/TSPL), `health_poll_interval` (seconds; `None`/`0` disables the background health-poll thread).
   - `type: brother_ql` — `identifier` (a `usb://VID:PID` or `tcp://host:port` string understood by `brother_ql_next`), `model` (e.g. `QL-500`; validated at startup against `brother_ql`'s model list, so a typo fails config loading instead of the first print).
-- **`logging`** (optional): `path` (file or directory — a directory gets `printer-tsc.log` appended), `level`, `max_bytes`/`backup_count` for log rotation. Omit for console-only logging.
+- **`logging`** (optional): `path` (file or directory — a directory gets `printer-tsc.log` appended), `level` (default `INFO`, applies to console too), `max_bytes` (default 10 MB)/`backup_count` for log rotation. Omit for console-only logging.
 
 ## The print flow, end to end
 
@@ -188,7 +190,7 @@ The one currently-configured multi-column size, `(106, 106)` px, is a 6-column t
 
 ### 7. Confirming outcomes to MSS
 
-Every successful or failed label eventually triggers `POST {mss.hostname}/api/confirmPrint?id={print_id}&status={1|2}[&note=...]`, using MSS basic auth. `status=1` = printed OK, `status=2` = failed (currently the *only* failure code in use — see the `TSC_FAILURE_STATUS` note above). `note` is the URL-encoded exception message, added so a human looking at MSS print history can see *why* a print failed (jam, timeout, HTTP fetch error, etc.) without needing to go dig in the service's log file (see git history: `5cb4d9a feat(mss): send note on confirmPrint failures`). All confirms — from the worker and from a failed image fetch in `mqtt.py` — go through `worker.confirm_all`, which uses `CONFIRM_TIMEOUT` (connect 5 s, read 15 s) so a hung MSS cannot block the worker or the MQTT loop, and treats a non-2xx response as a failure (logged as an error, not as "sent"). A failed confirm is not retried.
+Every successful or failed label eventually triggers `POST {mss.hostname}/api/confirmPrint?id={print_id}&status={1|2}[&note=...]`, using MSS basic auth. `status=1` = printed OK, `status=2` = failed (currently the *only* failure code in use — see the `TSC_FAILURE_STATUS` note above). `note` is the URL-encoded exception message (`worker.error_note`: `repr(e)` when the message is empty, so MSS never gets a blank note), added so a human looking at MSS print history can see *why* a print failed (jam, timeout, HTTP fetch error, etc.) without needing to go dig in the service's log file (see git history: `5cb4d9a feat(mss): send note on confirmPrint failures`). All confirms — from the worker and from a failed image fetch in `mqtt.py` — go through `worker.confirm_all`, which uses `CONFIRM_TIMEOUT` (connect 5 s, read 15 s) so a hung MSS cannot block the worker or the MQTT loop, and treats a non-2xx response as a failure (logged as an error, not as "sent"). A failed confirm is not retried.
 
 Jobs sourced from ERP (relative `url`, no `printHistoryId`) never get a confirm call — there's no MSS print-history row for them to update.
 

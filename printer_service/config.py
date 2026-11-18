@@ -32,8 +32,10 @@ class ServiceConfig(BaseModel):
 
 class LoggingConfig(BaseModel):
     path: str | None = None
-    level: str = "DEBUG"
-    max_bytes: int = 1024 * 1024
+    # INFO + 10 MB: DEBUG logged every MQTT payload and status poll, and at 1 MB the
+    # rotated files covered only hours -- too little history, too many SD card writes.
+    level: str = "INFO"
+    max_bytes: int = 10 * 1024 * 1024
     backup_count: int = 5
 
 

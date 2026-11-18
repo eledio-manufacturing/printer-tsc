@@ -38,8 +38,8 @@ Optional `logging` block enables rotating file logging alongside console output:
 ```yaml
 logging:
   path: /var/log/printer-tsc/service.log  # file or dir path (dir gets printer-tsc.log); omit = console only
-  level: DEBUG
-  max_bytes: 1048576   # rotate at 1MB
+  level: INFO
+  max_bytes: 10485760   # rotate at 10MB
   backup_count: 5      # keep 5 rotated files
 ```
 
