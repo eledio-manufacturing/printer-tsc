@@ -61,7 +61,10 @@ if __name__ == "__main__":
         client = mqtt_client.Client(mqtt_client.CallbackAPIVersion.VERSION2)
         client.tls_set(tls_version=ssl.PROTOCOL_TLS_CLIENT)
         client.username_pw_set(username=config.mqtt.auth.username, password=config.mqtt.auth.password)
-        client.connect(host=config.mqtt.hostname, port=config.mqtt.port)
+        # connect_async + retry_first_connection: a broker/network that isn't up yet
+        # (e.g. Pi booting faster than the network after a power cut) is retried with
+        # the reconnect backoff instead of crashing at startup like connect() does.
+        client.connect_async(host=config.mqtt.hostname, port=config.mqtt.port)
         client.on_connect = mqtt.on_connect
         client.on_disconnect = mqtt.on_disconnect
         client.on_subscribe = mqtt.on_subscribe
@@ -83,6 +86,7 @@ if __name__ == "__main__":
             client.loop_start()
             root.mainloop()
         else:
-            client.loop_forever()
+            client.loop_forever(retry_first_connection=True)
     else:
         logger.error("Configuration was not provided")
+        raise SystemExit(1)  # non-zero so systemd Restart=on-failure / monitoring notices

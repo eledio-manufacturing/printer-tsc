@@ -13,6 +13,23 @@ logger = logging.getLogger(__name__)
 
 
 def message_handle(client, config: AppConfig, message):
+    # paho re-raises exceptions from callbacks (suppress_exceptions defaults to False),
+    # which ends loop_forever() and with it the whole process -- one malformed message
+    # (bad JSON, missing "url", non-numeric width) must not stop printing for everyone.
+    try:
+        _handle_message(config, message)
+    except Exception:
+        logger.exception("Failed to handle MQTT message: %r", message.payload[:500])
+
+
+def _handle_message(config: AppConfig, message) -> None:
+    if message.retain:
+        # The broker replays a retained message on every (re)subscribe, i.e. after every
+        # reconnect -- printing it would reprint the same label each time. Live jobs are
+        # always delivered with retain=0.
+        logger.warning("Ignoring retained MQTT message: %r", message.payload[:500])
+        return
+
     msg_rx = json.loads(message.payload.decode("utf-8"))
     logger.debug("MQTT message received: %s", msg_rx)
 

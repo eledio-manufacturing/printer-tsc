@@ -1,21 +1,40 @@
 import os
 import tempfile
+from urllib.parse import urlsplit
 
 import requests
 from PIL import Image
 
 from printer_service import runtime
 
+# (connect, read) seconds. Without a timeout a hung ERP/MSS blocks the MQTT network
+# loop forever (fetch runs inside the message callback): no keepalive, broker drops
+# the connection and QoS 0 jobs published meanwhile are lost.
+HTTP_TIMEOUT = (5, 30)
+
+
+def _same_origin(url: str, base: str) -> bool:
+    # Only called for https:// URLs; treat an explicit :443 like no port, so
+    # "https://mss.example.com:443/x" still matches "https://mss.example.com".
+    a, b = urlsplit(url), urlsplit(base)
+    return (a.scheme, a.hostname, a.port or 443) == (b.scheme, b.hostname, b.port or 443)
+
 
 def fetch_image(url: str) -> tuple[Image.Image, bytes]:
     """Download and convert image. Returns (L-mode PIL Image, 1-bit bitmap bytes for TSC)."""
     cfg = runtime.config
     if url.startswith("https://"):
-        auth = (cfg.mss.auth.username, cfg.mss.auth.password)
-        r = requests.get(url, auth=auth)
+        # Only send MSS credentials to the MSS host itself -- the URL comes from the
+        # MQTT message, so anyone able to publish to the topic could otherwise point
+        # it at their own server and collect the credentials.
+        auth = (cfg.mss.auth.username, cfg.mss.auth.password) if _same_origin(url, cfg.mss.hostname) else None
+        r = requests.get(url, auth=auth, timeout=HTTP_TIMEOUT)
     else:
         auth = (cfg.erp.auth.username, cfg.erp.auth.password)
-        r = requests.get(cfg.erp.hostname + url, auth=auth)
+        r = requests.get(cfg.erp.hostname + url, auth=auth, timeout=HTTP_TIMEOUT)
+    # Otherwise an HTML error page (401/404/500) reaches Pillow and surfaces only as
+    # an opaque "cannot identify image file".
+    r.raise_for_status()
 
     fd, path = tempfile.mkstemp()
     try:
