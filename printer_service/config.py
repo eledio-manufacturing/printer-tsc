@@ -3,7 +3,8 @@ from pathlib import Path
 from typing import Annotated, Literal, Union
 
 import yaml
-from pydantic import BaseModel, Field
+from brother_ql.models import ModelsManager
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,16 @@ class BrotherQlPrinterConfig(BaseModel):
     type: Literal['brother_ql']
     identifier: str
     model: str
+
+    @field_validator('model')
+    @classmethod
+    def _known_model(cls, v: str) -> str:
+        # brother_ql only fails on an unknown model at the first print, with an empty
+        # exception message (BrotherQLUnknownModel()) -- catch it at startup instead.
+        known = list(ModelsManager().identifiers())
+        if v not in known:
+            raise ValueError(f"unknown Brother model {v!r}, expected one of {known}")
+        return v
 
 
 PrinterConfig = Annotated[

@@ -53,6 +53,15 @@ def select_brother_label_size(width: int, height: int) -> tuple[str, bool]:
     return result
 
 
+def _usb_ids(identifier: str) -> dict:
+    """'usb://0x04f9:0x2015[/serial]' -> {'idVendor': 0x04f9, 'idProduct': 0x2015}."""
+    vendor, _, product = identifier[len('usb://'):].partition('/')[0].partition(':')
+    ids = {'idVendor': int(vendor, 16)}
+    if product:
+        ids['idProduct'] = int(product, 16)
+    return ids
+
+
 def check_status(model: str, identifier: str) -> None:
     """Query the printer's status and raise if it explicitly reports an error.
 
@@ -87,7 +96,9 @@ def print_labels(label_img: Image.Image, count: int, model: str, identifier: str
         label_img = label_img.resize(upscale_target, Image.Resampling.LANCZOS)
     label_size, dpi_600 = select_brother_label_size(*label_img.size)
     if identifier.startswith('usb://'):
-        dev = usb.core.find(idVendor=0x04f9)
+        # Match the configured vendor:product, not just "any Brother device" -- the
+        # vendor-only lookup could reset a different Brother device on the same host.
+        dev = usb.core.find(**_usb_ids(identifier))
         if dev:
             dev.reset()
             time.sleep(1)  # device re-enumerates after reset; let it settle before reopening
@@ -102,8 +113,14 @@ def print_labels(label_img: Image.Image, count: int, model: str, identifier: str
         instructions = convert(qlr, [label_img], label_size, cut=True, dpi_600=dpi_600, compress=False, hq=True)
         result = send(instructions, printer_identifier=identifier, blocking=True)
         if not result['did_print']:
-            raise RuntimeError(
-                f"Label {i + 1}/{count} did not confirm printing (printer_state={result['printer_state']})"
-            )
+            if identifier.startswith('tcp://'):
+                # brother_ql's network backend returns right after the write and never
+                # reads a reply, so did_print is always False there -- treating that as a
+                # failure reported every network label as failed although it printed.
+                logger.info("Label %d/%d sent over network; print completion not verifiable", i + 1, count)
+            else:
+                raise RuntimeError(
+                    f"Label {i + 1}/{count} did not confirm printing (printer_state={result['printer_state']})"
+                )
         if on_printed:
             on_printed(i)
