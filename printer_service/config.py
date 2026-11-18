@@ -1,10 +1,15 @@
 import logging
+from pathlib import Path
 from typing import Annotated, Literal, Union
 
 import yaml
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+# Resolved from the package location, not the working directory, so the service
+# starts regardless of where it is launched from (systemd WorkingDirectory etc.).
+CONFIG_PATH = Path(__file__).resolve().parent.parent / 'config' / 'config.yaml'
 
 
 class Auth(BaseModel):
@@ -60,7 +65,7 @@ class AppConfig(BaseModel):
 
 def get_config() -> AppConfig | None:
     try:
-        with open('config/config.yaml', 'r') as f:
+        with open(CONFIG_PATH, 'r') as f:
             return AppConfig.model_validate(yaml.safe_load(f))
     except Exception as e:
         logger.error("Failed to load config: %s", e)

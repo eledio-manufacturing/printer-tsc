@@ -77,15 +77,15 @@ MQTT broker --publish--> printer-tsc --HTTP GET--> ERP or MSS (image)
 
 On startup:
 
-1. Loads and validates `config/config.yaml` into a Pydantic `AppConfig` (`printer_service/config.py`). If loading/validation fails, the process logs an error and exits without doing anything else.
+1. Loads and validates `config/config.yaml` into a Pydantic `AppConfig` (`printer_service/config.py`). The path is resolved relative to the project directory (`config.CONFIG_PATH`), not the working directory. If loading/validation fails, the process logs an error and exits with code 1 (so systemd `Restart=on-failure` and monitoring notice it).
 2. Stores that config in `printer_service/runtime.py`'s module-level `config` variable — a process-wide singleton read by every other module (avoids threading config through every function call).
 3. Optionally configures rotating file logging (`_configure_file_logging`), in addition to the console logging that's always on.
 4. Starts the background **print worker** thread (`worker.print_worker`) — this is the thread that actually talks to the printer.
 5. If using a TSC printer with `health_poll_interval` set, starts a second background thread (`tsc.poll_health`) that periodically queries printer status independent of any print job, and logs status changes (paper out, jam, head open, etc.).
-6. Connects to the MQTT broker over TLS, wires up callbacks, and subscribes to the configured topic.
-7. If `TEST_MODE=1` env var is set, opens a Tk preview window instead of driving a real printer (see Test mode below). Otherwise runs `client.loop_forever()` — the process's main loop is just the MQTT client loop; everything else happens in background threads and MQTT callback invocations.
+6. Connects to the MQTT broker over TLS (`connect_async`), wires up callbacks, and subscribes to the configured topic.
+7. If `TEST_MODE=1` env var is set, opens a Tk preview window instead of driving a real printer (see Test mode below). Otherwise runs `client.loop_forever(retry_first_connection=True)` — the process's main loop is just the MQTT client loop; everything else happens in background threads and MQTT callback invocations.
 
-Auto-reconnect to the MQTT broker is handled by `paho-mqtt`'s `reconnect_delay_set(1, 30)`.
+Auto-reconnect to the MQTT broker is handled by `paho-mqtt`'s `reconnect_delay_set(1, 30)`. Thanks to `connect_async` + `retry_first_connection=True` this backoff also covers the **first** connection, so a broker or network that isn't up yet at boot is retried instead of crashing the process (plain `connect()` raises synchronously).
 
 ## Configuration (`printer_service/config.py`, `config/config.yaml`)
 
@@ -115,6 +115,8 @@ Expected JSON payload:
 - `width` / `height`: the label's pixel dimensions — this is the key used everywhere downstream to decide which physical label size / TSPL command / Brother label size to use. These are **not** arbitrary; they must exactly match one of the hard-coded pixel-size tables in `printers/tsc.py` or `printers/brother.py`, or the print will fail with "no command for this size."
 - `printHistoryId`: only meaningful (and only kept) when `url` starts with `https://` — it's the MSS print-history row this job should confirm/fail against. Jobs whose image comes from ERP have no MSS row to confirm, so `print_id` is `None` for those and no confirm POST is ever sent for them.
 
+`message_handle` never lets an exception escape: paho re-raises callback exceptions by default, which would end `loop_forever()` and the process, so a malformed message (bad JSON, missing `url`, non-numeric `width`) is logged with its payload and dropped. Messages with the MQTT `retain` flag set are ignored — the broker replays a retained message on every (re)subscribe, so printing it would reprint the same label after every reconnect; live jobs always arrive with `retain=0`.
+
 ### 2. Image cache lookup (`printer_service/cache.py`)
 
 Before fetching, `message_handle` checks an in-process cache keyed on `(url, width, height)`. This exists because the **same physical label is frequently requested more than once in a short window** (e.g. user reprints, retries, multiple copies) — the cache avoids re-downloading and re-converting the image each time.
@@ -126,7 +128,8 @@ Before fetching, `message_handle` checks an in-process cache keyed on `(url, wid
 ### 3. Image fetch and conversion (`printer_service/imaging.py`)
 
 `fetch_image(url)`:
-- Picks ERP vs MSS auth based on whether `url` starts with `https://`.
+- Picks ERP vs MSS auth based on whether `url` starts with `https://`. MSS credentials are only sent when the URL has the same scheme/host/port as `mss.hostname`; any other `https://` host is fetched without auth, since the URL comes from the MQTT message and must not be able to collect credentials.
+- Uses `HTTP_TIMEOUT` (connect 5 s, read 30 s) and `raise_for_status()`: the fetch runs inside the MQTT callback, so a hung ERP/MSS would otherwise block the network loop indefinitely, and an HTML error page would otherwise surface only as Pillow's opaque "cannot identify image file".
 - Downloads the raw bytes, writes to a tempfile (Pillow needs a real file/path for some format detection), opens with Pillow, converts to `L` (8-bit grayscale) mode, then deletes the tempfile.
 - Converts to a 1-bit TSC bitmap via `to_bitmap_bytes`: convert to Pillow mode `'1'` (no dithering — labels are print/no-print, not photographic) and round-trip through a **PCX** file. The PCX round-trip isn't cosmetic — TSC's `BITMAP` command expects packed 1-bit-per-pixel row data, and going through PCX is the mechanism used to get Pillow's `'1'`-mode array into that exact packed byte layout via `.tobytes()`.
 - Returns `(label_img: Image in 'L' mode, tsc_bitmap: bytes)` — both are cached and carried through the pipeline; Brother printing uses the grayscale image, TSC printing uses the pre-packed bitmap bytes.
