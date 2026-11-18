@@ -21,6 +21,10 @@ print_queue: queue.Queue = queue.Queue()
 # collapsing every failure to 2 — e.g. {"out_of_paper": 3, "paper_jam": 4, ...}.
 TSC_FAILURE_STATUS: dict[str, int] = {}
 
+# (connect, read) seconds for confirmPrint. Without it a hung MSS blocks the print
+# worker (or the MQTT loop, for fetch failures) forever.
+CONFIRM_TIMEOUT = (5, 15)
+
 
 def _confirm_status_for(e: Exception) -> int:
     if isinstance(e, tsc.PrinterStatusError):
@@ -30,17 +34,21 @@ def _confirm_status_for(e: Exception) -> int:
     return 2
 
 
-def _confirm_all(print_ids: list, status: int, note: str | None = None) -> None:
+def confirm_all(print_ids: list, status: int, note: str | None = None) -> None:
     cfg = runtime.config
     auth = (cfg.mss.auth.username, cfg.mss.auth.password)
     note_qs = f'&note={quote_plus(note)}' if note else ''
     for pid in print_ids:
         if pid:
             try:
-                requests.post(
+                r = requests.post(
                     url=f'{cfg.mss.hostname}/api/confirmPrint?id={pid}&status={status}{note_qs}',
                     auth=auth,
+                    timeout=CONFIRM_TIMEOUT,
                 )
+                # A rejected confirm (401, 5xx) used to be logged as "sent" -- MSS then
+                # shows the job as pending forever while the log claims it was confirmed.
+                r.raise_for_status()
                 logger.debug("confirmPrint id=%s status=%d note=%r sent", pid, status, note)
             except Exception as e:
                 logger.error("confirmPrint failed for id=%s status=%d: %s", pid, status, e)
@@ -60,7 +68,7 @@ def _print_batch(batch: list) -> None:
         title = f"TEST batch x{count} {job['width']}x{job['height']} {job['url']}"
         test_preview.show_test_window(label_img, title)
         logger.info("TEST MODE: displayed %s", title)
-        _confirm_all(print_ids, status=1)
+        confirm_all(print_ids, status=1)
         return
 
     if isinstance(cfg.printer, BrotherQlPrinterConfig):
@@ -73,7 +81,7 @@ def _print_batch(batch: list) -> None:
         def _on_printed(i: int) -> None:
             nonlocal confirmed
             logger.info("Printed label %d/%d print_id=%s url=%s", i + 1, count, print_ids[i], job['url'])
-            _confirm_all([print_ids[i]], status=1)
+            confirm_all([print_ids[i]], status=1)
             confirmed = i + 1
 
         try:
@@ -84,14 +92,14 @@ def _print_batch(batch: list) -> None:
                 "Error printing to Brother QL after %d/%d labels (url=%s): %s",
                 confirmed, count, job['url'], e,
             )
-            _confirm_all(print_ids[confirmed:], status=2, note=str(e))
+            confirm_all(print_ids[confirmed:], status=2, note=str(e))
     else:
         confirmed = 0
 
         def _on_printed(i: int) -> None:
             nonlocal confirmed
             logger.info("Printed label %d/%d print_id=%s url=%s", i + 1, count, print_ids[i], job['url'])
-            _confirm_all([print_ids[i]], status=1)
+            confirm_all([print_ids[i]], status=1)
             confirmed = i + 1
 
         try:
@@ -102,11 +110,11 @@ def _print_batch(batch: list) -> None:
                 "Error printing to TSC after %d/%d labels (url=%s): %s",
                 confirmed, count, job['url'], e,
             )
-            _confirm_all(print_ids[confirmed:], status=_confirm_status_for(e), note=str(e))
+            confirm_all(print_ids[confirmed:], status=_confirm_status_for(e), note=str(e))
 
 
 def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
-    # Dedupe so _confirm_all doesn't POST /api/confirmPrint more than once per id.
+    # Dedupe so confirm_all doesn't POST /api/confirmPrint more than once per id.
     print_ids = list(dict.fromkeys(j['print_id'] for j in jobs if j['print_id']))
     cfg = runtime.config
 
@@ -128,7 +136,7 @@ def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
             out_path = f"test_multi_column_{int(time.time())}.png"
             composite_img.save(out_path)
             logger.info("TEST MODE: saved composite to %s", out_path)
-            _confirm_all(print_ids, status=1)
+            confirm_all(print_ids, status=1)
             return
 
         bitmaps = [imaging.to_bitmap_bytes(img) for img in images] if margin_px \
@@ -136,10 +144,10 @@ def _print_multi_column(jobs: list, mc_cfg: dict) -> None:
 
         tsc.print_multi_column(cfg.printer.address, cfg.printer.port, images, bitmaps, mc_cfg)
         logger.info("Multi-column print OK: %d labels, print_ids=%s", len(print_ids), print_ids)
-        _confirm_all(print_ids, status=1)
+        confirm_all(print_ids, status=1)
     except Exception as e:
         logger.error("Error printing multi-column to TSC (print_ids=%s): %s", print_ids, e)
-        _confirm_all(print_ids, status=_confirm_status_for(e), note=str(e))
+        confirm_all(print_ids, status=_confirm_status_for(e), note=str(e))
 
 
 def print_worker() -> None:

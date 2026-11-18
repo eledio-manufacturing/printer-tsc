@@ -186,7 +186,7 @@ The one currently-configured multi-column size, `(106, 106)` px, is a 6-column t
 
 ### 7. Confirming outcomes to MSS
 
-Every successful or failed label eventually triggers `POST {mss.hostname}/api/confirmPrint?id={print_id}&status={1|2}[&note=...]`, using MSS basic auth. `status=1` = printed OK, `status=2` = failed (currently the *only* failure code in use — see the `TSC_FAILURE_STATUS` note above). `note` is the URL-encoded exception message, added so a human looking at MSS print history can see *why* a print failed (jam, timeout, HTTP fetch error, etc.) without needing to go dig in the service's log file (see git history: `5cb4d9a feat(mss): send note on confirmPrint failures`).
+Every successful or failed label eventually triggers `POST {mss.hostname}/api/confirmPrint?id={print_id}&status={1|2}[&note=...]`, using MSS basic auth. `status=1` = printed OK, `status=2` = failed (currently the *only* failure code in use — see the `TSC_FAILURE_STATUS` note above). `note` is the URL-encoded exception message, added so a human looking at MSS print history can see *why* a print failed (jam, timeout, HTTP fetch error, etc.) without needing to go dig in the service's log file (see git history: `5cb4d9a feat(mss): send note on confirmPrint failures`). All confirms — from the worker and from a failed image fetch in `mqtt.py` — go through `worker.confirm_all`, which uses `CONFIRM_TIMEOUT` (connect 5 s, read 15 s) so a hung MSS cannot block the worker or the MQTT loop, and treats a non-2xx response as a failure (logged as an error, not as "sent"). A failed confirm is not retried.
 
 Jobs sourced from ERP (relative `url`, no `printHistoryId`) never get a confirm call — there's no MSS print-history row for them to update.
 

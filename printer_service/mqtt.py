@@ -1,8 +1,5 @@
 import json
 import logging
-from urllib.parse import quote_plus
-
-import requests
 
 from printer_service import worker
 from printer_service.cache import cache_get, cache_set
@@ -46,15 +43,7 @@ def _handle_message(config: AppConfig, message) -> None:
             cache_set(key, image_data)
         except Exception as e:
             logger.error("Failed to fetch/convert image %s: %s", url, e)
-            if print_id:
-                auth = (config.mss.auth.username, config.mss.auth.password)
-                try:
-                    requests.post(
-                        url=f'{config.mss.hostname}/api/confirmPrint?id={print_id}&status=2&note={quote_plus(str(e))}',
-                        auth=auth,
-                    )
-                except Exception as ce:
-                    logger.error("confirmPrint failed: %s", ce)
+            worker.confirm_all([print_id], status=2, note=str(e))
             return
     else:
         logger.debug("Cache hit for %s %dx%d", url, width, height)
