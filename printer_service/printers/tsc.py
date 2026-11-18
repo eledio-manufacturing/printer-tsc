@@ -203,12 +203,18 @@ def _send_and_verify_once(address: str, port: int, cmd: bytes, label_count: int,
             # actively printing -- keep polling until the outer deadline
             # instead of treating an ordinary mid-print disconnect as fatal.
             continue
-        if not (code & 0x20):
+        # Pause reports 0x10 without the printing bit, so a mid-job pause used to end
+        # the poll and confirm silently. Keep polling: the operator may resume in time.
+        if not (code & (0x20 | STATUS_PAUSE)):
             break
     if code & STATUS_ERROR_MASK:
         raise PrinterStatusError(code, "post_print")
     if code & 0x20:
         logger.warning("TSC status poll timed out while still printing (label_count=%d)", label_count)
+    elif code & STATUS_PAUSE:
+        # Not a failure: the job is already in the printer buffer and prints on resume.
+        # Reporting status 2 here would get it reprinted -- a duplicate label.
+        logger.warning("TSC printer paused after job sent; label confirmed, prints on resume")
 
 
 def poll_health(address: str, port: int, interval: float = 60.0) -> None:
