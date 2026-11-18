@@ -98,7 +98,7 @@ Top-level sections:
 - **`mss`**: hostname + auth for MSS — used when image `url` is an absolute `https://` URL, and always used for the `POST /api/confirmPrint` callback.
 - **`printer`**: a discriminated union on `type`:
   - `type: tsc` — `address`, `port` (raw TCP/TSPL), `health_poll_interval` (seconds; `None`/`0` disables the background health-poll thread).
-  - `type: brother_ql` — `identifier` (a `usb://VID:PID` or `tcp://host:port` string understood by `brother_ql_next`), `model` (e.g. `QL-500`).
+  - `type: brother_ql` — `identifier` (a `usb://VID:PID` or `tcp://host:port` string understood by `brother_ql_next`), `model` (e.g. `QL-500`; validated at startup against `brother_ql`'s model list, so a typo fails config loading instead of the first print).
 - **`logging`** (optional): `path` (file or directory — a directory gets `printer-tsc.log` appended), `level`, `max_bytes`/`backup_count` for log rotation. Omit for console-only logging.
 
 ## The print flow, end to end
@@ -177,9 +177,9 @@ The one currently-configured multi-column size, `(106, 106)` px, is a 6-column t
 
 - `BROTHER_LABEL_SIZES`: pixel-size table mapping `(width, height)` (checked in both orientations) to `brother_ql`'s label-size string + a `dpi_600` flag.
 - `DPI_600_UPSCALE`: two known sizes get resized via Lanczos to a 2x pixel size before printing, to drive the printer at 600dpi instead of 300dpi for those specific label dimensions.
-- USB device reset: for `usb://` identifiers, finds the device by vendor ID (`0x04f9`, Brother's USB vendor ID) and calls `dev.reset()` before printing, then sleeps 1s for the device to re-enumerate.
+- USB device reset: for `usb://` identifiers, finds the device by the vendor and product ID from the identifier (`usb://0x04f9:0x2015` → `idVendor=0x04f9, idProduct=0x2015`; vendor only if no product is given) and calls `dev.reset()` before printing, then sleeps 1s for the device to re-enumerate.
 - `check_status`: queries printer status via `brother_ql`'s `status()` helper and raises `BrotherStatusError` only on an explicit error reported by the printer. Network (`tcp://`) identifiers don't support this status query in `brother_ql_next` (SNMP-only, unimplemented) so it's skipped for those. The query itself is known to be flaky over USB on this printer (`"Received no data"` even when printing right after works fine) — a failed *query* is only logged, never treated as a print-blocking failure; only an actual reported error byte aborts the job.
-- `print_labels`: one independent raster job per label in the batch (own invalidate/initialize/cut cycle each) — a single multi-image raster stream was found to jam reliably on the trailing cut. Stops and raises as soon as one label's `send()` result reports `did_print: False`, so the worker's confirm logic only marks the labels that actually printed.
+- `print_labels`: one independent raster job per label in the batch (own invalidate/initialize/cut cycle each) — a single multi-image raster stream was found to jam reliably on the trailing cut. Stops and raises as soon as one label's `send()` result reports `did_print: False`, so the worker's confirm logic only marks the labels that actually printed. Exception: `tcp://` identifiers. `brother_ql`'s network backend never reads a reply, so `did_print` is always `False` there; a completed write is treated as printed (logged as not verifiable) instead of failing every network label.
 
 ### 7. Confirming outcomes to MSS
 
