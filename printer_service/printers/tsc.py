@@ -19,6 +19,7 @@ STATUS_BITS = {
     0x80: "other_error",
 }
 STATUS_ERROR_MASK = 0x01 | 0x02 | 0x04 | 0x08 | 0x80
+STATUS_PAUSE = 0x10
 
 
 class PrinterStatusError(RuntimeError):
@@ -76,33 +77,43 @@ MULTI_COLUMN_SIZES: dict[tuple[int, int], dict] = {
 }
 
 
+# Single-label pixel size (width, height) -> (TSPL SIZE, TSPL GAP, BITMAP x, BITMAP y).
+# BITMAP width/height are derived from the pixel size in select_print_command, so
+# they always match the bitmap bytes that print_batch checks and sends.
+TSC_LABEL_SIZES: dict[tuple[int, int], tuple[str, str, int, int]] = {
+    (256, 100): ("22 mm,10 mm", "2 mm,0", 2, 9),
+    (584, 280): ("50 mm,25 mm", "3 mm,0", 3, 7),
+    (824, 320): ("70 mm,30 mm", "3 mm,0", 1, 17),
+    (584, 340): ("50 mm,30 mm", "3 mm,0", 3, 30),
+    (880, 280): ("76.2 mm,25.4 mm", "3 mm,0", 10, 10),
+    (280, 130): ("25.4 mm,12.7 mm", "3 mm,0", 10, 10),
+    (104, 100): ("9 mm,9 mm", "2.8 mm,0", 1, 6),
+    (528, 340): ("45 mm,30 mm", "3 mm,0", 2, 30),
+}
+
+
+def bitmap_byte_count(width: int, height: int) -> int:
+    """Bytes a TSPL BITMAP of width x height dots consumes (rows padded to whole bytes)."""
+    return (width + 7) // 8 * height
+
+
 def select_print_command(data):
     """
     Create first part of command for printer
     :param data: dict received from mqtt
-    :return:
+    :return: TSPL prefix ending with the BITMAP header, or None for an unknown size
     """
-    msg = None
-    if "width" in data and "height" in data:
-        _width = int(data["width"])
-        _height = int(data["height"])
-        if _width == 256 and _height == 100:
-            msg = "DENSITY 13\r\nSPEED 1\r\nSIZE 22 mm,10 mm\r\nGAP 2 mm,0\r\nCLS\r\nBITMAP 2,9,32,100,0,"
-        elif _width == 584 and _height == 280:
-            msg = "DENSITY 13\r\nSPEED 1\r\nSIZE 50 mm,25 mm\r\nGAP 3 mm,0\r\nCLS\r\nBITMAP 3,7,73,280,0,"
-        elif _width == 824 and _height == 320:
-            msg = "DENSITY 13\r\nSPEED 1\r\nSIZE 70 mm,30 mm\r\nGAP 3 mm,0\r\nCLS\r\nBITMAP 1,17,103,320,0,"
-        elif _width == 584 and _height == 340:
-            msg = "DENSITY 13\r\nSPEED 1\r\nSIZE 50 mm,30 mm\r\nGAP 3 mm,0\r\nCLS\r\nBITMAP 3,30,73,340,0,"
-        elif _width == 880 and _height == 280:
-            msg = "DENSITY 13\r\nSPEED 1\r\nSIZE 76.2 mm,25.4 mm\r\nGAP 3 mm,0\r\nCLS\r\nBITMAP 10,10,110,280,0,"
-        elif _width == 280 and _height == 130:
-            msg = "DENSITY 13\r\nSPEED 1\r\nSIZE 25.4 mm,12.7 mm\r\nGAP 3 mm,0\r\nCLS\r\nBITMAP 10,10,35,130,0,"
-        elif _width == 104 and _height == 100:
-            msg = "DENSITY 13\r\nSPEED 1\r\nSIZE 9 mm,9 mm\r\nGAP 2.8 mm,0\r\nCLS\r\nBITMAP 1,6,13,100,0,"
-        elif _width == 528 and _height == 340:
-            msg = "DENSITY 13\r\nSPEED 1\r\nSIZE 45 mm,30 mm\r\nGAP 3 mm,0\r\nCLS\r\nBITMAP 2,30,66,340,0,"
-    return msg
+    if "width" not in data or "height" not in data:
+        return None
+    width, height = int(data["width"]), int(data["height"])
+    entry = TSC_LABEL_SIZES.get((width, height))
+    if entry is None:
+        return None
+    size, gap, x, y = entry
+    return (
+        f"DENSITY 13\r\nSPEED 1\r\nSIZE {size}\r\nGAP {gap}\r\nCLS\r\n"
+        f"BITMAP {x},{y},{(width + 7) // 8},{height},0,"
+    )
 
 
 def describe_status(code: int) -> str:
@@ -171,7 +182,10 @@ def _send_and_verify_once(address: str, port: int, cmd: bytes, label_count: int,
         if not pre_data:
             raise OSError("no response to pre-print status query")
         pre = pre_data[0]
-        if pre & STATUS_ERROR_MASK:
+        # A paused printer accepts the job into its buffer and the post-print poll sees
+        # no error bit, so the label was confirmed as printed while nothing came out
+        # (it prints later, on resume -- often after the operator already reprinted).
+        if pre & (STATUS_ERROR_MASK | STATUS_PAUSE):
             raise PrinterStatusError(pre, "pre_print")
 
         _send_throttled(s, cmd)
@@ -220,10 +234,24 @@ def poll_health(address: str, port: int, interval: float = 60.0) -> None:
         time.sleep(interval)
 
 
+def _check_bitmap_size(bitmap: bytes, width: int, height: int) -> None:
+    # BITMAP has no terminator: the printer reads exactly width_bytes*height bytes as
+    # image data. A downloaded image of a different size than the message claims would
+    # leave the printer swallowing PRINT and the next job as pixels (too short) or
+    # parsing leftover pixels as commands (too long).
+    expected = bitmap_byte_count(width, height)
+    if len(bitmap) != expected:
+        raise ValueError(
+            f"Image does not match label size {width}x{height} px "
+            f"(bitmap {len(bitmap)} B, expected {expected} B)"
+        )
+
+
 def print_batch(address: str, port: int, msg_rx: dict, tsc_bitmap: bytes, count: int, on_printed=None) -> None:
     cmd_prefix = select_print_command(msg_rx)
     if not cmd_prefix:
         raise ValueError(f"No TSC command for dimensions {msg_rx.get('width')}x{msg_rx.get('height')}")
+    _check_bitmap_size(tsc_bitmap, int(msg_rx['width']), int(msg_rx['height']))
     # One PRINT 1,1 job per label (own status verification) instead of a single
     # PRINT 1,count job, so a jam partway through leaves earlier labels confirmed
     # instead of failing the whole batch -- same reasoning as brother.print_labels.
@@ -237,6 +265,12 @@ def print_batch(address: str, port: int, msg_rx: dict, tsc_bitmap: bytes, count:
 def print_multi_column(address: str, port: int, images: list, bitmaps: list, mc_cfg: dict) -> None:
     label_w, label_h = images[0].size
     w_bytes = (label_w + 7) // 8
+    # Every column uses the first image's BITMAP header; a differently sized image
+    # would desync the printer's parser (see _check_bitmap_size).
+    for img, bmp in zip(images, bitmaps):
+        if img.size != (label_w, label_h):
+            raise ValueError(f"Multi-column images differ in size: {img.size} vs {(label_w, label_h)}")
+        _check_bitmap_size(bmp, label_w, label_h)
     pitch = label_w + mc_cfg['gap_px']
 
     # One BITMAP command per label, each at its own physical x offset — no
